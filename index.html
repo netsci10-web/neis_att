@@ -24,14 +24,48 @@ import {
   Filter,
   PieChart,
   CalendarRange,
-  ArrowDownAZ
+  ArrowDownAZ,
+  Sparkles,
+  Wand2,
+  BrainCircuit
 } from 'lucide-react';
 
+// --- Gemini API Configuration ---
+const apiKey = "";
+const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
 
-// Date formatting utilities
+const callGemini = async (prompt, systemInstruction = "") => {
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
+  
+  const payload = {
+    contents: [{ parts: [{ text: prompt }] }],
+    systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : { parts: [{ text: "You are a helpful administrative assistant for a South Korean elementary school." }] }
+  };
+
+  const maxRetries = 5;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) throw new Error('API request failed');
+      const result = await response.json();
+      return result.candidates?.[0]?.content?.parts?.[0]?.text;
+    } catch (error) {
+      if (i === maxRetries - 1) throw error;
+      const delay = Math.pow(2, i) * 1000;
+      await new Promise(res => setTimeout(res, delay));
+    }
+  }
+};
+
+// --- Utilities ---
 const formatDate = (date) => {
   if (!date) return "";
   const d = new Date(date);
+  if (isNaN(d.getTime())) return "";
   const year = d.getFullYear();
   const month = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
@@ -41,52 +75,60 @@ const formatDate = (date) => {
 const formatTime = (date) => {
   if (!date) return "";
   const d = new Date(date);
+  if (isNaN(d.getTime())) return "";
   const h = String(d.getHours()).padStart(2, '0');
   const m = String(d.getMinutes()).padStart(2, '0');
   return `${h}:${m}`;
 };
 
-// CSV 라인 파싱 헬퍼 (쌍따옴표 및 내부 줄바꿈 대응 강화)
 const parseCSVLine = (line) => {
   const result = [];
   let currentStr = '';
   let inQuotes = false;
-  
   for (let i = 0; i < line.length; i++) {
     const char = line[i];
-    if (char === '"') {
-      inQuotes = !inQuotes;
-    } else if (char === ',' && !inQuotes) {
-      result.push(currentStr.replace(/^"|"$/g, '').replace(/\\r\\n|\\n/g, ' ').trim());
+    if (char === '"') inQuotes = !inQuotes;
+    else if (char === ',' && !inQuotes) {
+      result.push(currentStr.replace(/^"|"$/g, '').trim());
       currentStr = '';
-    } else {
-      currentStr += char;
-    }
+    } else currentStr += char;
   }
-  result.push(currentStr.replace(/^"|"$/g, '').replace(/\\r\\n|\\n/g, ' ').trim());
+  result.push(currentStr.replace(/^"|"$/g, '').trim());
   return result;
 };
 
-// NEIS 기간 문자열 파싱
+const robustDateParse = (dateStr) => {
+  if (!dateStr) return null;
+  const matches = dateStr.match(/\d+/g);
+  if (matches && matches.length >= 3) {
+    const year = parseInt(matches[0]);
+    const month = parseInt(matches[1]) - 1;
+    const day = parseInt(matches[2]);
+    const hour = matches[3] ? parseInt(matches[3]) : 0;
+    const minute = matches[4] ? parseInt(matches[4]) : 0;
+    const date = new Date(year, month, day, hour, minute);
+    return isNaN(date.getTime()) ? null : date;
+  }
+  return null;
+};
+
 const parseNeisPeriod = (periodStr) => {
   if (!periodStr || periodStr === '-') return { start: new Date(), end: new Date() };
   const parts = periodStr.split('~').map(s => s.trim());
   if (parts.length === 2) {
-    const formatForDate = (dtStr) => {
-      const dtParts = dtStr.split(' ');
-      if (dtParts.length >= 2) return `${dtParts[0]}T${dtParts[1]}:00`;
-      return dtStr;
-    };
-    const startDate = new Date(formatForDate(parts[0]));
-    const endDate = new Date(formatForDate(parts[1]));
-    if (!isNaN(startDate.getTime()) && !isNaN(endDate.getTime())) return { start: startDate, end: endDate };
+    const start = robustDateParse(parts[0]);
+    const end = robustDateParse(parts[1]);
+    if (start && end) return { start, end };
+  } else {
+    const start = robustDateParse(parts[0]);
+    if (start) return { start, end: start };
   }
   return { start: new Date(), end: new Date() };
 };
 
 const normalizeType = (status) => {
   if (!status) return '기타';
-  const s = status.trim();
+  const s = status.replace(/\s/g, '');
   if (s.includes('연가') || s.includes('휴가')) return '연가';
   if (s.includes('병가') || s.includes('병조퇴')) return '병가';
   if (s.includes('출장')) return '출장';
@@ -97,11 +139,9 @@ const normalizeType = (status) => {
   return '기타';
 };
 
-// 💡 직위별 정렬 가중치 부여 함수 (수정됨)
 const getPositionWeight = (position) => {
   if (!position) return 100;
   const p = position.trim();
-  
   if (p.includes('초등학교교장') || p === '교장') return 1;
   if (p.includes('초등학교교감') || p === '교감') return 2;
   if (p.includes('부장교사')) return 3;
@@ -111,15 +151,10 @@ const getPositionWeight = (position) => {
   if (p.includes('영양교사')) return 7;
   if (p.includes('행정실장')) return 8;
   if (p.match(/\d+급/) || p.includes('7급') || p.includes('8급') || p.includes('9급')) return 9;
-  
   return 50; 
 };
 
-// 💡 초기 예제 데이터를 제거하고 빈 배열로 설정
-const DEFAULT_STAFF = [];
-const DEFAULT_DEPARTMENTS = ['마산중앙초등학교'];
-const WORK_TYPES = ['연가', '병가', '공가', '특별휴가', '조퇴', '외출', '출장', '기타'];
-
+// --- Styles ---
 const getStatusColor = (statusName) => {
   if (!statusName) return 'bg-gray-100 text-gray-800 border-gray-300';
   const s = statusName;
@@ -157,16 +192,16 @@ const CALENDAR_COLORS = {
 export default function WorkScheduleApp() {
   const [viewMode, setViewMode] = useState('calendar'); 
   const [uploadSubTab, setUploadSubTab] = useState('daily'); 
+  const [currentMonth, setCurrentMonth] = useState(new Date());
   
-  // 저장된 로컬 데이터 불러오기
   const [departments, setDepartments] = useState(() => {
     const saved = localStorage.getItem('work_schedule_departments');
-    return saved ? JSON.parse(saved) : DEFAULT_DEPARTMENTS;
+    return saved ? JSON.parse(saved) : ['마산중앙초등학교'];
   });
 
   const [staff, setStaff] = useState(() => {
     const saved = localStorage.getItem('work_schedule_staff');
-    return saved ? JSON.parse(saved) : DEFAULT_STAFF;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [events, setEvents] = useState(() => {
@@ -180,7 +215,6 @@ export default function WorkScheduleApp() {
     return [];
   });
 
-  // 상태 변경 시마다 로컬 스토리지에 자동 저장
   useEffect(() => {
     localStorage.setItem('work_schedule_departments', JSON.stringify(departments));
     localStorage.setItem('work_schedule_staff', JSON.stringify(staff));
@@ -206,7 +240,12 @@ export default function WorkScheduleApp() {
   });
 
   const handleSelectEvent = (event) => {
-    showAlert(`성명: ${event.name}\n상세내용: ${event.title}\n유형: ${event.type}\n사유: ${event.details}`);
+    const startDate = formatDate(event.start);
+    const endDate = formatDate(event.end);
+    const startTime = formatTime(event.start);
+    const endTime = formatTime(event.end);
+    let periodStr = startDate === endDate ? `${startDate} [${startTime} ~ ${endTime}]` : `${startDate} ${startTime} ~ ${endDate} ${endTime}`;
+    showAlert(`성명: ${event.name}\n복무: ${event.originalStatus || event.type}\n일시: ${periodStr}\n사유: ${event.details || '-'}${event.location ? `\n장소: ${event.location}` : ''}`);
   };
 
   const handleInputChange = (e) => {
@@ -219,191 +258,149 @@ export default function WorkScheduleApp() {
     const startDateTime = new Date(`${newEvent.date}T${newEvent.startTime}`);
     const endDateTime = new Date(`${newEvent.date}T${newEvent.endTime}`);
     const displayName = newEvent.name || '본인';
-    
     const newEventObj = {
       id: Date.now(), name: displayName, title: newEvent.title || `[${displayName}] ${newEvent.type}`,
       start: startDateTime, end: endDateTime, type: newEvent.type, details: newEvent.details, location: newEvent.location
     };
-
     setEvents(prev => {
-      const filtered = prev.filter(ex => 
-        !(ex.name === newEventObj.name && formatDate(ex.start) === formatDate(newEventObj.start) && ex.type === newEventObj.type)
-      );
+      const filtered = prev.filter(ex => !(ex.name === newEventObj.name && formatDate(ex.start) === formatDate(newEventObj.start) && ex.type === newEventObj.type));
       return [...filtered, newEventObj];
     });
-
     setIsModalOpen(false);
     setNewEvent({ name: '', title: '', date: formatDate(new Date()), startTime: '09:00', endTime: '17:00', type: '연가', details: '', location: '' });
   };
 
-  const deleteEvent = (id) => {
-    setEvents(events.filter(event => event.id !== id));
-  };
+  const deleteEvent = (id) => setEvents(events.filter(event => event.id !== id));
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
     if (!file) return;
-
     setIsSyncing(true);
-    setSyncMessage('파일을 분석 중입니다...');
-
+    setSyncMessage('파일 분석 중...');
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
         const text = event.target.result;
-        const rows = [];
-        let row = "";
-        let inQuotes = false;
+        const rows = []; let row = ""; let inQuotes = false;
         for (const char of text) {
           if (char === '"') inQuotes = !inQuotes;
-          if (char === '\n' && !inQuotes) {
-            rows.push(row.trim());
-            row = "";
-          } else {
-            row += char;
-          }
+          if (char === '\n' && !inQuotes) { rows.push(row.trim()); row = ""; } else row += char;
         }
         if (row) rows.push(row.trim());
         const lines = rows.filter(l => l.length > 0);
-        
-        if (lines.length < 2) throw new Error('데이터가 부족합니다.');
-
-        const headers = parseCSVLine(lines[0]);
+        if (lines.length < 2) throw new Error('데이터 부족');
+        const rawHeaders = parseCSVLine(lines[0]);
+        const headers = rawHeaders.map(h => h.replace(/\s/g, ''));
         const parsedData = [];
-
         if (uploadSubTab === 'daily') {
           for (let i = 1; i < lines.length; i++) {
             const currentLine = parseCSVLine(lines[i]);
-            const obj = {};
-            headers.forEach((h, idx) => obj[h] = currentLine[idx] || '');
+            const obj = {}; headers.forEach((h, idx) => obj[h] = currentLine[idx] || '');
             if ((obj['성명'] || obj['부서']) && obj['근무상황'] !== '정상근무') {
-              parsedData.push({
-                id: i, department: obj['부서'], position: obj['직급/직위/직종'], name: obj['성명'],
-                status: obj['근무상황'], period: obj['기간'], reason: obj['목적지'] || '-', approval: obj['승인상태']
-              });
+              parsedData.push({ id: i, department: obj['부서'], position: obj['직급/직위/직종'], name: obj['성명'], status: obj['근무상황'], period: obj['기간'], reason: obj['목적지'] || '-', approval: obj['승인상태'] });
             }
           }
         } else {
-          const nameIdx = headers.findIndex(h => h.includes('성명'));
-          const periodIdx = headers.findIndex(h => h.includes('기간'));
-          const typeIdx = headers.findIndex(h => h.includes('종별'));
-          const reasonIdx = headers.findIndex(h => h.includes('사유'));
-          const statusIdx = headers.findIndex(h => h.includes('결재상태'));
-          const deptIdx = headers.findIndex(h => h.includes('부서명'));
-          const posIdx = headers.findIndex(h => h.includes('직급'));
-
+          const nIdx = headers.findIndex(h => h.includes('성명')), pIdx = headers.findIndex(h => h.includes('기간')), tIdx = headers.findIndex(h => h.includes('종별')), rIdx = headers.findIndex(h => h.includes('사유')), sIdx = headers.findIndex(h => h.includes('결재상태')), dIdx = headers.findIndex(h => h.includes('부서명')), posIdx = headers.findIndex(h => h.includes('직급'));
           for (let i = 1; i < lines.length; i++) {
-            const currentLine = parseCSVLine(lines[i]);
-            const rawName = currentLine[nameIdx] || '';
-            const cleanName = rawName.split(/[\r\n(]/)[0].trim();
-            const status = currentLine[typeIdx] || '';
-            
+            const cur = parseCSVLine(lines[i]);
+            const rawName = cur[nIdx] || '', cleanName = rawName.split(/[\r\n(]/)[0].trim(), status = cur[tIdx] || '', period = cur[pIdx] || '';
             if (cleanName && status && !status.includes('정상')) {
-              parsedData.push({
-                id: i, department: currentLine[deptIdx] || departments[0] || '-', position: currentLine[posIdx] || '-', name: cleanName,
-                status: status, period: currentLine[periodIdx] || '-', reason: currentLine[reasonIdx] || '-', approval: currentLine[statusIdx] || '완결'
-              });
+              parsedData.push({ id: i, department: cur[dIdx] || departments[0] || '-', position: cur[posIdx] || '-', name: cleanName, status: status, period: period, reason: cur[rIdx] || '-', approval: cur[sIdx] || '완결' });
             }
           }
         }
-
         setDailyPreviewData(parsedData);
-        setSyncMessage(`총 ${parsedData.length}건의 데이터를 불러왔습니다.`);
-      } catch (error) {
-        setSyncMessage('파일 형식 분석 실패. 나이스 CSV 파일인지 확인해주세요.');
-      } finally {
-        setIsSyncing(false);
-        e.target.value = '';
-      }
+        setSyncMessage(`총 ${parsedData.length}건 성공적으로 로드.`);
+      } catch (error) { setSyncMessage('분석 실패.'); } finally { setIsSyncing(false); e.target.value = ''; }
     };
     reader.readAsText(file, 'utf-8');
   };
 
   const handleApplyUpdates = () => {
     if (dailyPreviewData.length === 0) return;
-
     const existingNames = new Set(staff.map(s => s.name));
-    const newStaffCandidates = [];
-    const seenNames = new Set();
-
+    const newStaffCandidates = []; const seenNames = new Set();
     dailyPreviewData.forEach(p => {
       if (!existingNames.has(p.name) && !seenNames.has(p.name)) {
-        newStaffCandidates.push({
-          id: (Date.now() + Math.random()).toString(36),
-          name: p.name,
-          position: p.position || '-',
-          department: p.department || departments[0] || '마산중앙초등학교'
-        });
+        newStaffCandidates.push({ id: (Date.now() + Math.random()).toString(36), name: p.name, position: p.position || '-', department: p.department || departments[0] });
         seenNames.add(p.name);
       }
     });
-
-    const proceedWithEvents = (finalStaff) => {
+    const proceed = () => {
+      let earliest = null, latest = null;
       const newEvents = dailyPreviewData.map((person, index) => {
         const { start, end } = parseNeisPeriod(person.period);
-        return {
-          id: Date.now() + index, name: person.name, department: person.department, position: person.position,
-          originalStatus: person.status, title: `[${person.name}] ${person.status}`,
-          start, end, type: normalizeType(person.status), details: person.reason,
-          location: person.status.includes('출장') ? person.reason : ''
-        };
+        if (start && (!earliest || start < earliest)) earliest = start;
+        if (end && (!latest || end > latest)) latest = end;
+        return { id: Date.now() + index, name: person.name, department: person.department, position: person.position, originalStatus: person.status, title: `[${person.name}] ${person.status}`, start, end, type: normalizeType(person.status), details: person.reason, location: person.status.includes('출장') ? person.reason : '' };
       });
-
       setEvents(prev => {
-        let updatedEvents = [...prev];
-        newEvents.forEach(ne => {
-          updatedEvents = updatedEvents.filter(ex => 
-            !(ex.name === ne.name && formatDate(ex.start) === formatDate(ne.start) && ex.type === ne.type)
-          );
-        });
-        return [...updatedEvents, ...newEvents];
+        let updated = [...prev];
+        newEvents.forEach(ne => updated = updated.filter(ex => !(ex.name === ne.name && formatDate(ex.start) === formatDate(ne.start) && ex.type === ne.type)));
+        return [...updated, ...newEvents];
       });
-
-      setDailyPreviewData([]);
-      setSyncMessage('');
-      showAlert(`${newEvents.length}건의 일정이 업데이트(중복 항목은 덮어쓰기) 되었습니다.`);
+      if (earliest && !isNaN(earliest.getTime())) setCurrentMonth(new Date(earliest.getFullYear(), earliest.getMonth(), 1));
+      setDailyPreviewData([]); setSyncMessage('');
+      showAlert(`${newEvents.length}건 업데이트 완료.`);
       setViewMode('calendar');
     };
+    if (newStaffCandidates.length > 0) showConfirm(`신규 근무자 발견: ${newStaffCandidates.map(s => s.name).join(', ')}\n상시 명단에 추가하시겠습니까?`, () => { setStaff([...staff, ...newStaffCandidates]); proceed(); }, proceed);
+    else proceed();
+  };
 
-    if (newStaffCandidates.length > 0) {
-      const namesList = newStaffCandidates.map(s => `${s.name}(${s.position})`).join(', ');
-      showConfirm(
-        `설정에 등록되지 않은 신규 근무자가 발견되었습니다:\n[${namesList}]\n\n이 인원들을 상시 근무자 명단(설정)에 추가하시겠습니까?`,
-        () => {
-          const updatedStaff = [...staff, ...newStaffCandidates];
-          setStaff(updatedStaff);
-          proceedWithEvents(updatedStaff);
-        },
-        () => {
-          proceedWithEvents(staff);
-        }
-      );
-    } else {
-      proceedWithEvents(staff);
+  // --- AI Features ---
+  const [aiReport, setAiReport] = useState("");
+  const [isAiLoading, setIsAiLoading] = useState(false);
+
+  const generateAiReport = async (date, currentStaffStatuses) => {
+    setIsAiLoading(true);
+    const summary = currentStaffStatuses.map(s => `${s.name}(${s.position}): ${s.status} ${s.reason !== '-' ? `(${s.reason})` : ''}`).join('\n');
+    const prompt = `다음은 ${date} 마산중앙초등학교의 교직원 근무 현황입니다. 부재자(연가, 출장, 병가 등)를 중심으로 관리자에게 보고할 지능형 요약 리포트를 한국어로 작성해 주세요. 전문적이고 정중한 어조를 사용하세요.\n\n현황:\n${summary}`;
+    
+    try {
+      const result = await callGemini(prompt, "You are a professional administrative reporting expert for schools.");
+      setAiReport(result);
+    } catch (error) {
+      showAlert("AI 리포트 생성 중 오류가 발생했습니다.");
+    } finally {
+      setIsAiLoading(false);
+    }
+  };
+
+  const polishReasonWithAi = async () => {
+    if (!newEvent.details) return showAlert("먼저 간단한 사유를 입력해 주세요.");
+    setIsAiLoading(true);
+    const prompt = `'${newEvent.details}'라는 복무 사유를 나이스(NEIS) 행정 시스템에 입력하기 적합한 전문적이고 격식 있는 행정 용어로 다듬어 주세요. 결과만 짧게 출력해 주세요 (예: '개인 용무 처리', '가족 간병', '업무 관련 회의 참석' 등).`;
+    
+    try {
+      const result = await callGemini(prompt, "You polish informal text into formal Korean administrative terms.");
+      setNewEvent(prev => ({ ...prev, details: result.replace(/['"]/g, "").trim() }));
+    } catch (error) {
+      showAlert("AI 사유 다듬기 중 오류가 발생했습니다.");
+    } finally {
+      setIsAiLoading(false);
     }
   };
 
   // --- Views ---
 
   const CustomCalendar = () => {
-    const [currentMonth, setCurrentMonth] = useState(new Date());
     const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
     const firstDay = (y, m) => new Date(y, m, 1).getDay();
-
     const dInM = daysInMonth(currentMonth.getFullYear(), currentMonth.getMonth());
     const fDay = firstDay(currentMonth.getFullYear(), currentMonth.getMonth());
-
     const days = [];
     for (let i = 0; i < fDay; i++) days.push(<div key={`e-${i}`} className="min-h-[100px] border border-gray-100 bg-gray-50/50"></div>);
     for (let d = 1; d <= dInM; d++) {
       const dateStr = formatDate(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), d));
       const dayEvents = events.filter(e => formatDate(e.start) <= dateStr && formatDate(e.end) >= dateStr);
       days.push(
-        <div key={d} className="min-h-[100px] border border-gray-200 bg-white p-1 hover:bg-blue-50" onClick={() => { setNewEvent({...newEvent, date: dateStr}); setIsModalOpen(true); }}>
-          <div className={`text-sm font-medium p-1 w-7 h-7 flex items-center justify-center rounded-full ${formatDate(new Date()) === dateStr ? 'bg-blue-600 text-white' : 'text-gray-700'}`}>{d}</div>
+        <div key={d} className="min-h-[100px] border border-gray-200 bg-white p-1 hover:bg-blue-50 transition-colors" onClick={() => { setNewEvent({...newEvent, date: dateStr}); setIsModalOpen(true); }}>
+          <div className={`text-sm font-medium p-1 w-7 h-7 flex items-center justify-center rounded-full ${formatDate(new Date()) === dateStr ? 'bg-blue-600 text-white shadow-md' : 'text-gray-700'}`}>{d}</div>
           <div className="mt-1 flex flex-col gap-1">
             {dayEvents.map(e => (
-              <div key={e.id} onClick={(ev) => { ev.stopPropagation(); handleSelectEvent(e); }} className={`text-[10px] px-1 py-0.5 rounded text-white truncate ${CALENDAR_COLORS[e.type] || 'bg-gray-500'}`}>
+              <div key={e.id} onClick={(ev) => { ev.stopPropagation(); handleSelectEvent(e); }} className={`text-[10px] px-1.5 py-0.5 rounded text-white truncate shadow-sm ${CALENDAR_COLORS[e.type] || 'bg-gray-500'}`}>
                 {e.title}
               </div>
             ))}
@@ -411,90 +408,20 @@ export default function WorkScheduleApp() {
         </div>
       );
     }
-
     return (
-      <div className="bg-white rounded-lg shadow">
-        <div className="p-4 flex items-center justify-between border-b">
-          <h2 className="text-xl font-bold">{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월</h2>
+      <div className="bg-white rounded-2xl shadow-xl overflow-hidden animate-in fade-in duration-500 border border-gray-100">
+        <div className="p-6 flex items-center justify-between border-b bg-white">
+          <h2 className="text-2xl font-black text-gray-800 tracking-tight">{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월</h2>
           <div className="flex gap-2">
-            <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1, 1))} className="p-2 border rounded"><ChevronLeft className="w-4 h-4"/></button>
-            <button onClick={() => setCurrentMonth(new Date())} className="px-3 py-1 border rounded text-sm">오늘</button>
-            <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1, 1))} className="p-2 border rounded"><ChevronRight className="w-4 h-4"/></button>
+            <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1, 1))} className="p-2 border-2 border-gray-100 rounded-xl hover:bg-gray-50 transition-all"><ChevronLeft className="w-5 h-5 text-gray-600"/></button>
+            <button onClick={() => setCurrentMonth(new Date())} className="px-4 py-2 border-2 border-gray-100 rounded-xl text-sm font-black text-gray-700 hover:bg-gray-50 transition-all">오늘</button>
+            <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1, 1))} className="p-2 border-2 border-gray-100 rounded-xl hover:bg-gray-50 transition-all"><ChevronRight className="w-5 h-5 text-gray-600"/></button>
           </div>
         </div>
-        <div className="grid grid-cols-7 bg-gray-50 text-center font-bold text-xs py-2 border-b">
-          {['일','월','화','수','목','금','토'].map(d => <div key={d}>{d}</div>)}
+        <div className="grid grid-cols-7 bg-gray-50/80 text-center font-black text-[11px] py-3 border-b border-gray-100 tracking-widest text-gray-400">
+          {['SUN','MON','TUE','WED','THU','FRI','SAT'].map(d => <div key={d} className={d==='SUN'?'text-red-400':d==='SAT'?'text-blue-400':''}>{d}</div>)}
         </div>
         <div className="grid grid-cols-7">{days}</div>
-      </div>
-    );
-  };
-
-  const UploadView = () => {
-    return (
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <div className="bg-gray-50 border-b p-4">
-          <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-            <div>
-              <h3 className="text-lg font-bold flex items-center gap-2 text-blue-600">
-                <Upload className="w-5 h-5" /> 복무상황 업로드
-              </h3>
-              <p className="text-xs text-gray-500">나이스 CSV 파일을 업로드하여 일정을 자동 등록합니다. 동일한 날짜/유형은 덮어쓰기 됩니다.</p>
-            </div>
-            <div className="flex bg-gray-200 p-1 rounded-lg">
-              <button onClick={() => {setUploadSubTab('daily'); setDailyPreviewData([]);}} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${uploadSubTab === 'daily' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>일일근무상황</button>
-              <button onClick={() => {setUploadSubTab('period'); setDailyPreviewData([]);}} className={`px-4 py-1.5 text-xs font-bold rounded-md transition-all ${uploadSubTab === 'period' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>기간별 근무상황</button>
-            </div>
-          </div>
-        </div>
-
-        <div className="p-6 border-b flex flex-col items-center justify-center bg-blue-50/30">
-          <div className="text-center mb-4">
-            <p className="text-sm font-medium text-gray-700">
-              {uploadSubTab === 'daily' ? '[일일근무상황조회] 화면의 CSV 파일을 선택하세요.' : '[근무상황관리] 또는 [기간별복무조회]의 CSV 파일을 선택하세요.'}
-            </p>
-          </div>
-          <input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
-          <button onClick={() => fileInputRef.current.click()} disabled={isSyncing} className="bg-blue-600 text-white px-8 py-3 rounded-full shadow-lg hover:bg-blue-700 flex items-center gap-2 font-bold transition-transform active:scale-95">
-            <Upload className="w-5 h-5" /> CSV 파일 선택
-          </button>
-          {syncMessage && <p className="mt-4 text-sm text-blue-700 font-bold flex items-center gap-1"><AlertCircle className="w-4 h-4" /> {syncMessage}</p>}
-        </div>
-
-        {dailyPreviewData.length > 0 && (
-          <div className="p-4">
-            <div className="flex justify-between items-center mb-4">
-              <h4 className="font-bold text-gray-800">업로드 미리보기 ({dailyPreviewData.length}건)</h4>
-              <button onClick={handleApplyUpdates} className="bg-green-600 text-white px-4 py-2 rounded-md font-bold flex items-center gap-2 hover:bg-green-700">
-                <CheckCircle className="w-4 h-4" /> 전체 일정에 업데이트
-              </button>
-            </div>
-            <div className="overflow-x-auto border rounded-lg">
-              <table className="min-w-full divide-y divide-gray-200 text-xs">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-2 border-r text-center">성명</th>
-                    <th className="px-4 py-2 border-r text-center">근무상황</th>
-                    <th className="px-4 py-2 border-r text-center">기간</th>
-                    <th className="px-4 py-2 text-center">사유</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-200">
-                  {dailyPreviewData.map((d, i) => (
-                    <tr key={i} className="hover:bg-gray-50">
-                      <td className="px-4 py-2 font-bold text-center border-r">{d.name}</td>
-                      <td className="px-4 py-2 text-center border-r">
-                        <span className={`px-2 py-0.5 rounded-full border ${getStatusColor(d.status)}`}>{d.status}</span>
-                      </td>
-                      <td className="px-4 py-2 text-center border-r text-gray-500">{d.period}</td>
-                      <td className="px-4 py-2 truncate max-w-[200px]">{d.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
       </div>
     );
   };
@@ -506,30 +433,15 @@ export default function WorkScheduleApp() {
     const getCombinedStaff = () => {
       const staffMap = new Map();
       staff.forEach(s => staffMap.set(s.name, s));
-      events.forEach(e => {
-        if (e.name && !staffMap.has(e.name)) {
-          staffMap.set(e.name, { department: e.department || departments[0], position: e.position || '-', name: e.name });
-        }
-      });
-      
-      const result = [];
-      const seen = new Set();
-      
-      staff.forEach(s => {
-        result.push(s);
-        seen.add(s.name);
-      });
-      
-      Array.from(staffMap.values()).forEach(s => {
-        if (!seen.has(s.name)) result.push(s);
-      });
-      
+      events.forEach(e => { if (e.name && !staffMap.has(e.name)) staffMap.set(e.name, { department: e.department || departments[0], position: e.position || '-', name: e.name }); });
+      const result = []; const seen = new Set();
+      staff.forEach(s => { result.push(s); seen.add(s.name); });
+      Array.from(staffMap.values()).forEach(s => { if (!seen.has(s.name)) result.push(s); });
       return result;
     };
 
     const isEventOnDate = (event, dateStr) => {
-      const s = formatDate(event.start);
-      const e = formatDate(event.end);
+      const s = formatDate(event.start); const e = formatDate(event.end);
       return dateStr >= s && dateStr <= e;
     };
 
@@ -540,12 +452,6 @@ export default function WorkScheduleApp() {
                     : { ...s, status: '정상근무', period: '-', reason: '-' };
     });
 
-    const counts = {
-      전체: staffStatuses.length,
-      정상근무: staffStatuses.filter(p => normalizeType(p.status) === '정상근무').length,
-      부재: staffStatuses.filter(p => normalizeType(p.status) !== '정상근무').length,
-    };
-
     const filtered = staffStatuses.filter(p => {
       if (filterStatus === '전체') return true;
       if (filterStatus === '정상근무') return normalizeType(p.status) === '정상근무';
@@ -554,45 +460,72 @@ export default function WorkScheduleApp() {
     });
 
     return (
-      <div className="space-y-4">
-        <div className="bg-white rounded-lg shadow p-4 flex flex-col md:flex-row justify-between gap-4 items-center">
-          <div className="flex items-center gap-4">
-            <h3 className="font-bold flex items-center gap-2"><Building className="w-5 h-5 text-blue-600"/> 기관현황</h3>
-            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="border rounded p-1 text-sm"/>
+      <div className="space-y-6">
+        <div className="bg-white rounded-2xl shadow-xl p-6 flex flex-col lg:flex-row justify-between gap-6 items-center border border-gray-100">
+          <div className="flex items-center gap-4 w-full lg:w-auto">
+            <div className="p-3 bg-blue-50 rounded-2xl">
+               <Building className="w-6 h-6 text-blue-600"/>
+            </div>
+            <div>
+               <h3 className="font-black text-gray-800 text-lg tracking-tight">기관 복무 현황</h3>
+               <p className="text-xs text-gray-400 font-medium">선택된 날짜의 전체 인원 상태를 확인합니다.</p>
+            </div>
           </div>
-          <div className="flex gap-2 text-xs font-bold">
-            <button onClick={() => setFilterStatus('전체')} className={`px-3 py-1.5 rounded-full border ${filterStatus === '전체' ? 'bg-blue-600 text-white' : 'bg-white text-gray-500'}`}>전체 {counts.전체}</button>
-            <button onClick={() => setFilterStatus('정상근무')} className={`px-3 py-1.5 rounded-full border ${filterStatus === '정상근무' ? 'bg-gray-800 text-white' : 'bg-white text-gray-500'}`}>정상 {counts.정상근무}</button>
-            <button onClick={() => setFilterStatus('부재중')} className={`px-3 py-1.5 rounded-full border ${filterStatus === '부재중' ? 'bg-red-600 text-white' : 'bg-white text-gray-500'}`}>부재 {counts.부재}</button>
+          <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto justify-end">
+            <input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} className="border-2 border-gray-100 rounded-xl p-2.5 text-sm font-bold focus:border-blue-500 outline-none shadow-sm transition-all"/>
+            <div className="h-10 w-[2px] bg-gray-100 mx-2 hidden lg:block"></div>
+            <button onClick={() => setFilterStatus('전체')} className={`px-4 py-2.5 rounded-xl border-2 transition-all text-xs font-black ${filterStatus === '전체' ? 'bg-blue-600 text-white border-blue-600 shadow-lg shadow-blue-100' : 'border-gray-50 text-gray-500 hover:bg-gray-50'}`}>전체</button>
+            <button onClick={() => setFilterStatus('부재중')} className={`px-4 py-2.5 rounded-xl border-2 transition-all text-xs font-black ${filterStatus === '부재중' ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-100' : 'border-gray-50 text-gray-500 hover:bg-gray-50'}`}>부재중</button>
+            <button 
+              onClick={() => generateAiReport(selectedDate, staffStatuses)}
+              disabled={isAiLoading}
+              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white text-xs font-black shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50"
+            >
+              {isAiLoading ? <RefreshCw className="w-4 h-4 animate-spin"/> : <Sparkles className="w-4 h-4"/>}
+              ✨ AI 현황 분석
+            </button>
           </div>
         </div>
 
-        <div className="bg-white rounded-lg shadow overflow-hidden">
-          <table className="min-w-full divide-y divide-gray-200 text-xs">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-center font-bold text-gray-500 uppercase">성명</th>
-                <th className="px-4 py-3 text-center font-bold text-gray-500 uppercase">근무상황</th>
-                <th className="px-4 py-3 text-center font-bold text-gray-500 uppercase">기간/시간</th>
-                <th className="px-4 py-3 text-center font-bold text-gray-500 uppercase">사유/용무</th>
+        {aiReport && (
+          <div className="bg-indigo-50 border-2 border-indigo-100 rounded-2xl p-6 animate-in slide-in-from-top-4 duration-500 relative group">
+             <div className="flex items-center gap-2 mb-3">
+                <BrainCircuit className="w-5 h-5 text-indigo-600" />
+                <h4 className="font-black text-indigo-900 text-sm">✨ AI 지능형 현황 요약</h4>
+             </div>
+             <p className="text-sm text-indigo-800 leading-relaxed whitespace-pre-wrap">{aiReport}</p>
+             <button onClick={() => setAiReport("")} className="absolute top-4 right-4 text-indigo-300 hover:text-indigo-600 transition-colors">
+                <X className="w-5 h-5" />
+             </button>
+          </div>
+        )}
+
+        <div className="bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
+          <table className="min-w-full divide-y divide-gray-100 text-xs">
+            <thead className="bg-gray-50/50">
+              <tr className="text-gray-400 font-black tracking-widest uppercase">
+                <th className="px-6 py-4 text-left">성명 및 직위</th>
+                <th className="px-6 py-4 text-center">근무 상황</th>
+                <th className="px-6 py-4 text-center">기간/시간</th>
+                <th className="px-6 py-4 text-left">사유/용무</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-200">
+            <tbody className="divide-y divide-gray-50 bg-white">
               {filtered.map((p, i) => (
-                <tr key={i} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-center font-bold">{p.name} <span className="text-[10px] text-gray-400 font-normal">{p.position}</span></td>
-                  <td className="px-4 py-3 text-center">
-                    <span className={`px-2 py-0.5 rounded-full border font-bold ${getStatusColor(p.status)}`}>{p.status}</span>
+                <tr key={i} className="hover:bg-blue-50/10 transition-colors">
+                  <td className="px-6 py-4 whitespace-nowrap">
+                    <div className="flex flex-col">
+                      <span className="font-black text-gray-800 text-sm">{p.name}</span>
+                      <span className="text-[10px] text-gray-400 font-bold">{p.position}</span>
+                    </div>
                   </td>
-                  <td className="px-4 py-3 text-center text-gray-500">{p.period}</td>
-                  <td className="px-4 py-3 text-gray-600 truncate max-w-[150px]">{p.reason}</td>
+                  <td className="px-6 py-4 text-center">
+                    <span className={`px-3 py-1 rounded-full border-2 font-black text-[10px] ${getStatusColor(p.status)}`}>{p.status}</span>
+                  </td>
+                  <td className="px-6 py-4 text-center text-gray-500 font-medium">{p.period}</td>
+                  <td className="px-6 py-4 text-gray-600 text-sm max-w-[300px] truncate">{p.reason}</td>
                 </tr>
               ))}
-              {filtered.length === 0 && (
-                 <tr>
-                    <td colSpan="4" className="px-4 py-10 text-center text-gray-400">등록된 교직원 데이터가 없습니다.</td>
-                 </tr>
-              )}
             </tbody>
           </table>
         </div>
@@ -600,160 +533,132 @@ export default function WorkScheduleApp() {
     );
   };
 
-  const SettingsView = () => {
-    const [newDept, setNewDept] = useState('');
-    const [newStaff, setNewStaff] = useState({ name: '', position: '', department: departments[0] || '' });
-    const [editingStaffId, setEditingStaffId] = useState(null);
-    const [editStaffData, setEditStaffData] = useState({ name: '', position: '' });
-
-    const handleAddDept = (e) => {
-      e.preventDefault();
-      if (!newDept.trim() || departments.includes(newDept)) return;
-      setDepartments([...departments, newDept.trim()]);
-      setNewDept('');
-    };
-
-    const handleDeleteDept = (d) => {
-      showConfirm(`'${d}' 부서를 삭제하시겠습니까?`, () => {
-        setDepartments(departments.filter(item => item !== d));
-        setStaff(staff.filter(s => s.department !== d));
-      });
-    };
-
-    const handleAddStaff = (e, dept) => {
-      e.preventDefault();
-      if (!newStaff.name.trim()) return;
-      const sMember = { id: Date.now().toString(), department: dept, position: newStaff.position || '-', name: newStaff.name };
-      setStaff([...staff, sMember]);
-      setNewStaff({ name: '', position: '', department: dept });
-    };
-
-    const handleSortStaff = () => {
-      const sorted = [...staff].sort((a, b) => {
-        const weightA = getPositionWeight(a.position);
-        const weightB = getPositionWeight(b.position);
-        if (weightA !== weightB) return weightA - weightB;
-        return a.name.localeCompare(b.name, 'ko');
-      });
-      setStaff(sorted);
-      showAlert('직위 우선순위에 따라 정렬되었습니다.');
-    };
-
-    const handleMoveStaff = (id, direction) => {
-      const idx = staff.findIndex(s => s.id === id);
-      if (idx === -1) return;
-      
-      const newStaff = [...staff];
-      const targetIdx = direction === 'up' ? idx - 1 : idx + 1;
-      
-      if (targetIdx >= 0 && targetIdx < newStaff.length) {
-        [newStaff[idx], newStaff[targetIdx]] = [newStaff[targetIdx], newStaff[idx]];
-        setStaff(newStaff);
-      }
-    };
-
-    const handleEditSave = (id) => {
-      setStaff(staff.map(s => s.id === id ? { ...s, name: editStaffData.name, position: editStaffData.position } : s));
-      setEditingStaffId(null);
-    };
-
-    return (
-      <div className="space-y-6">
-        <div className="bg-white p-4 rounded-lg shadow flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-          <h3 className="font-bold flex items-center gap-2 text-gray-700"><SettingsIcon className="w-5 h-5"/> 조직 및 근무자 설정</h3>
-          <div className="flex gap-2 w-full sm:w-auto">
-            <button onClick={handleSortStaff} className="flex-1 sm:flex-none text-xs font-bold bg-blue-50 text-blue-600 border border-blue-200 px-3 py-1.5 rounded flex items-center justify-center gap-1">
-              <ArrowDownAZ className="w-4 h-4"/> 직위순 정렬
-            </button>
-            <button onClick={() => {localStorage.clear(); window.location.reload();}} className="flex-1 sm:flex-none text-xs text-red-500 border border-red-200 px-3 py-1.5 rounded">데이터 초기화</button>
+  const UploadView = () => (
+    <div className="bg-white rounded-2xl shadow-xl overflow-hidden animate-in slide-in-from-bottom-4 duration-500 border border-gray-100">
+      <div className="bg-gray-50 p-6 border-b border-gray-100 flex flex-col sm:flex-row justify-between items-center gap-6">
+        <div className="flex items-center gap-4">
+          <div className="p-3 bg-blue-600 rounded-2xl shadow-lg shadow-blue-100">
+            <Upload className="w-6 h-6 text-white"/>
+          </div>
+          <div>
+            <h3 className="text-xl font-black text-gray-800 tracking-tight">복무상황 데이터 업로드</h3>
+            <p className="text-xs text-gray-400 font-medium">나이스(NEIS)에서 다운로드한 CSV 파일을 일괄 반영합니다.</p>
           </div>
         </div>
-
-        <div className="bg-white p-4 rounded-lg shadow">
-          <h4 className="text-sm font-bold mb-3">부서 추가</h4>
-          <form onSubmit={handleAddDept} className="flex gap-2">
-            <input type="text" value={newDept} onChange={e => setNewDept(e.target.value)} placeholder="부서명 입력" className="flex-1 border rounded p-2 text-sm"/>
-            <button className="bg-gray-800 text-white px-4 rounded text-sm font-bold">추가</button>
-          </form>
+        <div className="flex bg-gray-200/50 p-1.5 rounded-2xl w-full sm:w-auto">
+          <button onClick={() => {setUploadSubTab('daily'); setDailyPreviewData([]);}} className={`flex-1 sm:flex-none px-6 py-2 text-xs font-black rounded-xl transition-all ${uploadSubTab === 'daily' ? 'bg-white shadow-lg text-blue-600' : 'text-gray-500'}`}>일일 현황</button>
+          <button onClick={() => {setUploadSubTab('period'); setDailyPreviewData([]);}} className={`flex-1 sm:flex-none px-6 py-2 text-xs font-black rounded-xl transition-all ${uploadSubTab === 'period' ? 'bg-white shadow-lg text-blue-600' : 'text-gray-500'}`}>기간별 현황</button>
         </div>
-
-        {departments.map(dept => (
-          <div key={dept} className="bg-white rounded-lg shadow overflow-hidden border border-gray-100">
-            <div className="bg-gray-50 p-3 border-b flex justify-between items-center">
-              <span className="font-bold text-blue-700">{dept}</span>
-              <button onClick={() => handleDeleteDept(dept)} className="text-red-400 hover:text-red-600"><Trash2 className="w-4 h-4"/></button>
-            </div>
-            <div className="p-3 bg-blue-50/30 border-b">
-              <form onSubmit={e => handleAddStaff(e, dept)} className="flex gap-2">
-                <input type="text" value={newStaff.department === dept ? newStaff.position : ''} onChange={e => setNewStaff({...newStaff, position: e.target.value, department: dept})} placeholder="직위" className="w-32 border rounded p-1.5 text-xs"/>
-                <input type="text" value={newStaff.department === dept ? newStaff.name : ''} onChange={e => setNewStaff({...newStaff, name: e.target.value, department: dept})} placeholder="성명" className="flex-1 border rounded p-1.5 text-xs"/>
-                <button className="bg-blue-600 text-white px-3 rounded text-xs">추가</button>
-              </form>
-            </div>
-            <ul className="divide-y text-sm">
-              {staff.filter(s => s.department === dept).map((s, idx, arr) => (
-                <li key={s.id} className="p-3 flex justify-between items-center hover:bg-gray-50 transition-colors">
-                  {editingStaffId === s.id ? (
-                    <div className="flex gap-2 w-full">
-                      <input type="text" value={editStaffData.position} onChange={e => setEditStaffData({...editStaffData, position: e.target.value})} className="w-32 border p-1 rounded text-xs"/>
-                      <input type="text" value={editStaffData.name} onChange={e => setEditStaffData({...editStaffData, name: e.target.value})} className="flex-1 border p-1 rounded text-xs"/>
-                      <button onClick={() => handleEditSave(s.id)} className="bg-green-600 text-white px-2 py-1 rounded text-xs">저장</button>
-                      <button onClick={() => setEditingStaffId(null)} className="bg-gray-200 px-2 py-1 rounded text-xs">취소</button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-4">
-                        <span className="w-32 text-center text-[11px] font-bold text-blue-600 bg-blue-50 py-1 rounded border border-blue-100 truncate">{s.position}</span>
-                        <span className="font-bold text-gray-800">{s.name}</span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <div className="flex border rounded overflow-hidden">
-                          <button onClick={() => handleMoveStaff(s.id, 'up')} disabled={idx === 0} className={`p-1 ${idx === 0 ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'}`}><ChevronUp className="w-4 h-4"/></button>
-                          <button onClick={() => handleMoveStaff(s.id, 'down')} disabled={idx === arr.length - 1} className={`p-1 border-l ${idx === arr.length - 1 ? 'text-gray-200' : 'text-gray-400 hover:bg-gray-100'}`}><ChevronDown className="w-4 h-4"/></button>
-                        </div>
-                        <button onClick={() => { setEditingStaffId(s.id); setEditStaffData({name: s.name, position: s.position}); }} className="text-gray-300 hover:text-blue-500"><Pencil className="w-4 h-4"/></button>
-                        <button onClick={() => setStaff(staff.filter(i => i.id !== s.id))} className="text-gray-300 hover:text-red-500"><Trash2 className="w-4 h-4"/></button>
-                      </div>
-                    </>
-                  )}
-                </li>
-              ))}
-              {staff.filter(s => s.department === dept).length === 0 && (
-                <li className="p-10 text-center text-gray-400">등록된 근무자가 없습니다. 상단에서 추가하세요.</li>
-              )}
-            </ul>
-          </div>
-        ))}
       </div>
-    );
-  };
+      <div className="p-16 flex flex-col items-center justify-center bg-blue-50/20 border-b border-gray-100 border-dashed m-6 rounded-3xl border-2">
+        <p className="text-sm font-bold text-gray-700 mb-2">{uploadSubTab === 'daily' ? '[일일근무상황조회] 화면의 파일을 선택하세요.' : '[근무상황관리] 또는 [기간별복무조회] 파일을 선택하세요.'}</p>
+        <p className="text-xs text-gray-400 mb-8">모든 연도와 월의 데이터가 정확히 처리됩니다.</p>
+        <input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+        <button onClick={() => fileInputRef.current.click()} disabled={isSyncing} className="group relative bg-blue-600 text-white px-12 py-4 rounded-2xl font-black shadow-xl shadow-blue-200 hover:bg-blue-700 transition-all hover:scale-105 active:scale-95 disabled:opacity-50">
+          <div className="flex items-center gap-3">
+             <Upload className="w-5 h-5" />
+             CSV 파일 불러오기
+          </div>
+        </button>
+        {syncMessage && <p className="mt-8 text-sm text-blue-700 font-black bg-blue-100 px-6 py-3 rounded-2xl animate-bounce flex items-center gap-2"><CheckCircle className="w-5 h-5"/> {syncMessage}</p>}
+      </div>
+      {dailyPreviewData.length > 0 && (
+        <div className="p-8 animate-in fade-in duration-500">
+          <div className="flex justify-between items-center mb-6">
+            <h4 className="font-black text-gray-800 text-lg">가져온 데이터 미리보기 ({dailyPreviewData.length}건)</h4>
+            <button onClick={handleApplyUpdates} className="bg-green-600 text-white px-8 py-3 rounded-2xl font-black shadow-xl shadow-green-100 hover:bg-green-700 transition-all hover:scale-105 active:scale-95 flex items-center gap-2">
+              <CheckCircle className="w-5 h-5"/> 복무 현황 최종 반영
+            </button>
+          </div>
+          <div className="overflow-x-auto border-2 border-gray-50 rounded-3xl">
+            <table className="min-w-full divide-y divide-gray-100 text-xs">
+              <thead className="bg-gray-50/50">
+                <tr>
+                  <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-widest text-center">성명</th>
+                  <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-widest text-center">상황</th>
+                  <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-widest text-center">기간</th>
+                  <th className="px-6 py-4 font-black text-gray-400 uppercase tracking-widest text-left">비고</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50 bg-white font-medium">
+                {dailyPreviewData.map((d, i) => (
+                  <tr key={i} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 font-black text-center text-gray-800">{d.name}</td>
+                    <td className="px-6 py-4 text-center">
+                      <span className={`px-3 py-1 rounded-lg border-2 font-black text-[10px] ${getStatusColor(d.status)}`}>{d.status}</span>
+                    </td>
+                    <td className="px-6 py-4 text-center text-gray-500">{d.period}</td>
+                    <td className="px-6 py-4 truncate max-w-[250px] text-gray-400">{d.reason}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 
   const AddModal = () => {
     if (!isModalOpen) return null;
     return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="absolute inset-0 bg-black/50" onClick={() => setIsModalOpen(false)}></div>
-        <div className="bg-white rounded-xl shadow-2xl z-10 w-full max-w-md overflow-hidden">
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-300" onClick={() => setIsModalOpen(false)}></div>
+        <div className="bg-white rounded-[2rem] shadow-2xl z-10 w-full max-w-md overflow-hidden animate-in zoom-in duration-300 border border-gray-100">
           <form onSubmit={handleSubmit}>
-            <div className="p-4 border-b flex justify-between items-center bg-gray-50">
-              <h3 className="font-bold">신규 복무 등록</h3>
-              <button type="button" onClick={() => setIsModalOpen(false)}><X className="w-5 h-5"/></button>
-            </div>
-            <div className="p-4 space-y-3">
-              <input type="text" name="name" value={newEvent.name} onChange={handleInputChange} placeholder="성명" required className="w-full border rounded p-2 text-sm"/>
-              <select name="type" value={newEvent.type} onChange={handleInputChange} className="w-full border rounded p-2 text-sm">
-                {WORK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <input type="date" name="date" value={newEvent.date} onChange={handleInputChange} className="w-full border rounded p-2 text-sm"/>
-              <div className="flex gap-2">
-                <input type="time" name="startTime" value={newEvent.startTime} onChange={handleInputChange} className="flex-1 border rounded p-2 text-sm"/>
-                <input type="time" name="endTime" value={newEvent.endTime} onChange={handleInputChange} className="flex-1 border rounded p-2 text-sm"/>
+            <div className="p-7 border-b border-gray-50 flex justify-between items-center bg-gray-50/50">
+              <div className="flex items-center gap-3">
+                 <div className="w-10 h-10 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-100">
+                    <Plus className="w-5 h-5 text-white" />
+                 </div>
+                 <h3 className="font-black text-gray-800 text-lg tracking-tight">수동 복무 등록</h3>
               </div>
-              <input type="text" name="details" value={newEvent.details} onChange={handleInputChange} placeholder="상세 사유/용무" className="w-full border rounded p-2 text-sm"/>
+              <button type="button" onClick={() => setIsModalOpen(false)} className="text-gray-300 hover:text-gray-600 transition-colors"><X className="w-6 h-6"/></button>
             </div>
-            <div className="p-4 bg-gray-50 border-t flex gap-2">
-              <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-2 border rounded font-bold text-gray-500">취소</button>
-              <button type="submit" className="flex-1 py-2 bg-blue-600 text-white rounded font-bold">저장</button>
+            <div className="p-8 space-y-5">
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">성명</label>
+                <input type="text" name="name" value={newEvent.name} onChange={handleInputChange} placeholder="성명 입력" required className="w-full border-2 border-gray-100 rounded-2xl p-3.5 text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-sm bg-white"/>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">종별</label>
+                <select name="type" value={newEvent.type} onChange={handleInputChange} className="w-full border-2 border-gray-100 rounded-2xl p-3.5 text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-sm bg-white appearance-none">
+                  {WORK_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">날짜</label>
+                <input type="date" name="date" value={newEvent.date} onChange={handleInputChange} className="w-full border-2 border-gray-100 rounded-2xl p-3.5 text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-sm bg-white"/>
+              </div>
+              <div className="flex gap-4">
+                <div className="flex-1 space-y-1.5">
+                  <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">시작</label>
+                  <input type="time" name="startTime" value={newEvent.startTime} onChange={handleInputChange} className="w-full border-2 border-gray-100 rounded-2xl p-3.5 text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-sm bg-white"/>
+                </div>
+                <div className="flex-1 space-y-1.5">
+                  <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest ml-1">종료</label>
+                  <input type="time" name="endTime" value={newEvent.endTime} onChange={handleInputChange} className="w-full border-2 border-gray-100 rounded-2xl p-3.5 text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-sm bg-white"/>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <div className="flex justify-between items-center ml-1">
+                   <label className="text-[10px] font-black text-blue-600 uppercase tracking-widest">상세 사유</label>
+                   <button 
+                    type="button"
+                    onClick={polishReasonWithAi}
+                    disabled={isAiLoading}
+                    className="flex items-center gap-1 text-[10px] font-black text-indigo-600 hover:text-indigo-800 transition-all disabled:opacity-50"
+                   >
+                     {isAiLoading ? <RefreshCw className="w-3 h-3 animate-spin"/> : <Wand2 className="w-3 h-3"/>}
+                     ✨ AI 다듬기
+                   </button>
+                </div>
+                <input type="text" name="details" value={newEvent.details} onChange={handleInputChange} placeholder="사유를 입력하고 AI 버튼을 눌러보세요" className="w-full border-2 border-gray-100 rounded-2xl p-3.5 text-sm font-bold focus:border-blue-500 outline-none transition-all shadow-sm bg-white"/>
+              </div>
+            </div>
+            <div className="p-7 bg-gray-50/50 border-t border-gray-50 flex gap-4">
+              <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-4 border-2 border-gray-200 rounded-2xl font-black text-gray-400 hover:bg-white hover:text-gray-600 transition-all active:scale-95">취소</button>
+              <button type="submit" className="flex-1 py-4 bg-blue-600 text-white rounded-2xl font-black shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95">신청 완료</button>
             </div>
           </form>
         </div>
@@ -762,31 +667,42 @@ export default function WorkScheduleApp() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 font-sans text-gray-900">
-      <header className="bg-white border-b sticky top-0 z-40">
-        <div className="max-w-5xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <CalendarRange className="w-6 h-6 text-blue-600" />
-            <h1 className="text-lg font-black tracking-tight">WorkSync Pro</h1>
+    <div className="min-h-screen bg-gray-50 font-sans text-gray-900 selection:bg-blue-100">
+      <header className="bg-white/80 backdrop-blur-xl border-b border-gray-100 sticky top-0 z-40 shadow-sm">
+        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between">
+          <div className="flex items-center gap-3 group cursor-pointer" onClick={() => setViewMode('calendar')}>
+            <div className="p-2.5 bg-blue-600 rounded-[1.25rem] shadow-xl shadow-blue-100 group-hover:rotate-12 transition-transform duration-500">
+              <CalendarRange className="w-6 h-6 text-white" />
+            </div>
+            <div>
+               <h1 className="text-xl font-black tracking-tighter text-gray-800 leading-none">WorkSync <span className="text-blue-600">Pro</span></h1>
+               <span className="text-[10px] font-bold text-gray-400 tracking-widest uppercase">Admin Dashboard</span>
+            </div>
           </div>
-          <nav className="hidden md:flex gap-1">
+          <nav className="hidden lg:flex gap-1.5">
             {[
-              { id: 'calendar', icon: CalendarIcon, label: '달력' },
-              { id: 'list', icon: List, label: '목록' },
-              { id: 'organization', icon: Building, label: '기관현황' },
+              { id: 'calendar', icon: CalendarIcon, label: '근무 달력' },
+              { id: 'list', icon: List, label: '전체 목록' },
+              { id: 'organization', icon: Building, label: '기관 현황' },
               { id: 'upload', icon: Upload, label: '복무 업로드' },
-              { id: 'settings', icon: SettingsIcon, label: '설정' }
+              { id: 'settings', icon: SettingsIcon, label: '인사 설정' }
             ].map(item => (
-              <button key={item.id} onClick={() => setViewMode(item.id)} className={`px-4 py-2 rounded-md text-xs font-bold flex items-center gap-2 transition-all ${viewMode === item.id ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>
+              <button key={item.id} onClick={() => setViewMode(item.id)} className={`px-5 py-2.5 rounded-2xl text-[13px] font-black flex items-center gap-2.5 transition-all ${viewMode === item.id ? 'bg-blue-600 text-white shadow-xl shadow-blue-100' : 'text-gray-400 hover:bg-gray-50 hover:text-gray-600'}`}>
                 <item.icon className="w-4 h-4"/> {item.label}
               </button>
             ))}
           </nav>
-          <button onClick={() => setIsModalOpen(true)} className="bg-blue-600 text-white px-4 py-2 rounded-lg text-xs font-bold shadow-md hover:bg-blue-700 active:scale-95 transition-all">신규 등록</button>
+          <button onClick={() => setIsModalOpen(true)} className="relative overflow-hidden bg-gray-900 text-white px-7 py-3 rounded-2xl text-[13px] font-black shadow-2xl hover:shadow-gray-200 transition-all hover:scale-105 active:scale-95 group">
+             <span className="relative z-10 flex items-center gap-2">
+                <Plus className="w-4 h-4" />
+                복무 신청
+             </span>
+             <div className="absolute inset-0 bg-gradient-to-tr from-blue-600 to-indigo-600 opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+          </button>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto p-4 pb-20">
+      <main className="max-w-7xl mx-auto px-6 py-10 pb-32">
         {viewMode === 'calendar' && <CustomCalendar />}
         {viewMode === 'list' && <ListView events={events} onDelete={deleteEvent}/>}
         {viewMode === 'organization' && <OrganizationView />}
@@ -796,24 +712,35 @@ export default function WorkScheduleApp() {
 
       <AddModal />
 
+      {/* Global Modals */}
       {globalAlert.isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-xs p-6">
-            <h3 className="font-bold text-gray-900 mb-2">알림</h3>
-            <p className="text-sm text-gray-600 mb-6 whitespace-pre-wrap">{globalAlert.message}</p>
-            <button onClick={() => setGlobalAlert({isOpen: false, message: ''})} className="w-full bg-blue-600 text-white py-2 rounded font-bold">확인</button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-10 animate-in zoom-in duration-300 border border-gray-100">
+            <div className="flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-blue-50 rounded-3xl flex items-center justify-center mb-6">
+                <AlertCircle className="w-8 h-8 text-blue-600" />
+              </div>
+              <h3 className="font-black text-gray-900 text-xl mb-3 tracking-tight">알림</h3>
+              <p className="text-sm text-gray-500 mb-10 whitespace-pre-wrap leading-relaxed font-medium">{globalAlert.message}</p>
+              <button onClick={() => setGlobalAlert({isOpen: false, message: ''})} className="w-full bg-gray-900 text-white py-4 rounded-2xl font-black shadow-2xl hover:bg-gray-800 active:scale-95 transition-all">확인했습니다</button>
+            </div>
           </div>
         </div>
       )}
 
       {globalConfirm.isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-xs p-6">
-            <h3 className="font-bold text-gray-900 mb-2">확인</h3>
-            <p className="text-sm text-gray-600 mb-6 whitespace-pre-wrap">{globalConfirm.message}</p>
-            <div className="flex gap-2">
-              <button onClick={() => { if(globalConfirm.onCancel) globalConfirm.onCancel(); setGlobalConfirm({isOpen: false, message: ''}); }} className="flex-1 bg-gray-100 text-gray-600 py-2 rounded font-bold">취소</button>
-              <button onClick={() => { if(globalConfirm.onConfirm) globalConfirm.onConfirm(); setGlobalConfirm({isOpen: false, message: ''}); }} className="flex-1 bg-blue-600 text-white py-2 rounded font-bold">진행</button>
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-md animate-in fade-in duration-300">
+          <div className="bg-white rounded-[2.5rem] shadow-2xl w-full max-w-sm p-10 animate-in zoom-in duration-300 border border-gray-100">
+             <div className="flex flex-col items-center text-center">
+              <div className="w-16 h-16 bg-orange-50 rounded-3xl flex items-center justify-center mb-6">
+                 <HelpCircle className="w-8 h-8 text-orange-600" />
+              </div>
+              <h3 className="font-black text-gray-900 text-xl mb-3 tracking-tight">확인이 필요합니다</h3>
+              <p className="text-sm text-gray-500 mb-10 whitespace-pre-wrap leading-relaxed font-medium">{globalConfirm.message}</p>
+              <div className="flex gap-4 w-full">
+                <button onClick={() => { if(globalConfirm.onCancel) globalConfirm.onCancel(); setGlobalConfirm({isOpen: false, message: ''}); }} className="flex-1 bg-gray-100 text-gray-500 py-4 rounded-2xl font-black hover:bg-gray-200 transition-all active:scale-95">취소</button>
+                <button onClick={() => { if(globalConfirm.onConfirm) globalConfirm.onConfirm(); setGlobalConfirm({isOpen: false, message: ''}); }} className="flex-1 bg-blue-600 text-white py-4 rounded-2xl font-black shadow-xl shadow-blue-100 hover:bg-blue-700 transition-all active:scale-95">진행하기</button>
+              </div>
             </div>
           </div>
         </div>
@@ -822,25 +749,52 @@ export default function WorkScheduleApp() {
   );
 }
 
+function HelpCircle({ className }) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <circle cx="12" cy="12" r="10" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" />
+      <path d="M12 17h.01" />
+    </svg>
+  );
+}
+
 function ListView({ events, onDelete }) {
   const sorted = [...events].sort((a, b) => b.start - a.start);
   return (
-    <div className="bg-white rounded-lg shadow overflow-hidden">
-      <div className="p-4 border-b font-bold text-gray-700 flex items-center gap-2"><List className="w-5 h-5"/> 전체 복무 기록</div>
-      <div className="divide-y divide-gray-100">
-        {sorted.length === 0 ? <div className="p-10 text-center text-gray-400 text-sm">데이터가 없습니다.</div> : sorted.map(e => (
-          <div key={e.id} className="p-4 flex justify-between items-center hover:bg-gray-50">
+    <div className="bg-white rounded-3xl shadow-xl overflow-hidden animate-in fade-in duration-700 border border-gray-50">
+      <div className="p-7 border-b font-black text-gray-800 flex items-center justify-between bg-gray-50/30">
+        <div className="flex items-center gap-3">
+          <div className="p-2.5 bg-blue-100 rounded-xl">
+             <List className="w-5 h-5 text-blue-600"/>
+          </div>
+          <div>
+             <h3 className="text-lg tracking-tight">전체 복무 마스터 목록</h3>
+             <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">Total {events.length} Records</p>
+          </div>
+        </div>
+      </div>
+      <div className="divide-y divide-gray-50">
+        {sorted.length === 0 ? (
+          <div className="p-32 text-center text-gray-300 font-black flex flex-col items-center gap-5">
+             <div className="w-20 h-20 bg-gray-50 rounded-full flex items-center justify-center">
+                <FileText className="w-10 h-10 opacity-20" />
+             </div>
+             <p>아직 등록된 복무 데이터가 없습니다.</p>
+          </div>
+        ) : sorted.map(e => (
+          <div key={e.id} className="p-6 flex justify-between items-center hover:bg-blue-50/10 transition-all group">
             <div className="flex-1">
-              <div className="flex items-center gap-2 mb-1">
-                <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold border ${TYPE_COLORS[e.type] || 'bg-gray-100'}`}>{e.type}</span>
-                <span className="font-bold text-sm">{e.name} - {e.details}</span>
+              <div className="flex items-center gap-4 mb-3">
+                <span className={`px-3 py-1 rounded-xl text-[10px] font-black border-2 shadow-sm ${TYPE_COLORS[e.type] || 'bg-gray-100'}`}>{e.type}</span>
+                <span className="font-black text-base text-gray-800 tracking-tight">{e.name} <span className="font-bold text-gray-300 text-xs ml-2">/ {e.details}</span></span>
               </div>
-              <div className="text-xs text-gray-400 flex items-center gap-3">
-                <span className="flex items-center gap-1"><Clock className="w-3 h-3"/> {formatDate(e.start)} {formatTime(e.start)} ~ {formatTime(e.end)}</span>
-                {e.location && <span className="flex items-center gap-1"><MapPin className="w-3 h-3"/> {e.location}</span>}
+              <div className="text-[11px] text-gray-400 flex flex-wrap items-center gap-6 font-bold tracking-tight">
+                <span className="flex items-center gap-2"><Clock className="w-4 h-4 text-blue-300"/> {formatDate(e.start)} {formatTime(e.start)} ~ {formatDate(e.end)} {formatTime(e.end)}</span>
+                {e.location && <span className="flex items-center gap-2 px-3 py-1 bg-green-50 text-green-600 rounded-lg"><MapPin className="w-3.5 h-3.5"/> {e.location}</span>}
               </div>
             </div>
-            <button onClick={() => onDelete(e.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 className="w-4 h-4"/></button>
+            <button onClick={() => onDelete(e.id)} className="text-gray-200 hover:text-red-500 p-3 hover:bg-red-50 rounded-2xl transition-all"><Trash2 className="w-6 h-6"/></button>
           </div>
         ))}
       </div>
