@@ -1,4 +1,4 @@
-<<!DOCTYPE html>
+<!DOCTYPE html>
 <!-- 구글 번역 확장프로그램 등으로 인한 React 렌더링 충돌(하얀 화면) 원천 차단 -->
 <html lang="ko" translate="no">
 <head>
@@ -17,7 +17,7 @@
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   
-  <!-- Babel (for in-browser JSX compilation) -->
+  <!-- Babel -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.6/babel.min.js"></script>
 
   <style>
@@ -36,10 +36,11 @@
     input, select, button, textarea { min-height: 48px; }
     .transition-custom { transition: all 0.2s ease-in-out; }
     
-    .calendar-day { min-height: 140px; }
+    .calendar-day { min-height: 150px; }
+    .text-huge { font-size: 1.5rem; }
   </style>
 </head>
-<body class="bg-slate-50 text-slate-800 selection:bg-blue-100 antialiased">
+<body class="bg-slate-50 text-slate-700 selection:bg-blue-100 antialiased">
   <div id="root"></div>
 
   <script type="text/babel">
@@ -60,9 +61,10 @@
             <div className="min-h-screen flex items-center justify-center bg-white p-4">
               <div className="max-w-lg w-full p-10 text-center border border-slate-200 rounded-[2.5rem] shadow-2xl">
                 <i className="fa-solid fa-triangle-exclamation text-6xl text-red-500 mb-8"></i>
-                <h2 className="text-3xl font-bold text-slate-900 mb-4">데이터 처리 오류</h2>
-                <p className="text-slate-500 mb-10 leading-relaxed text-lg font-medium">기존 저장 데이터와 새 버전의 충돌이 발생했습니다.<br/>아래 버튼을 눌러 초기화해 주세요.</p>
-                <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-bold hover:bg-slate-800 transition-custom text-xl shadow-xl active:scale-95">설정 및 데이터 전체 초기화</button>
+                <h2 className="text-3xl font-semibold text-slate-900 mb-4">화면을 불러올 수 없습니다</h2>
+                <p className="text-slate-500 mb-10 leading-relaxed text-lg font-medium">데이터 충돌이나 브라우저 자동 번역 기능으로 인해 에러가 발생했습니다. 아래 버튼을 눌러 데이터를 초기화해 주세요.</p>
+                <button onClick={() => { localStorage.clear(); window.location.reload(); }} className="w-full bg-slate-900 text-white py-5 rounded-2xl font-bold hover:bg-slate-800 transition-custom text-xl shadow-xl active:scale-95">설정 및 데이터 초기화</button>
+                <pre className="mt-6 text-[10px] text-slate-300 overflow-auto text-left max-h-32">{this.state.error && this.state.error.toString()}</pre>
               </div>
             </div>
           );
@@ -75,16 +77,36 @@
     const GEMINI_MODEL = "gemini-2.5-flash-preview-09-2025";
     const callGemini = async (prompt, systemInstruction = "") => {
       const apiKey = localStorage.getItem('gemini_api_key') || "";
-      if (!apiKey) throw new Error('API_KEY_MISSING');
+      if (!apiKey) throw new Error('API 키가 설정되지 않았습니다. [인사 설정] 탭에서 등록해 주세요.');
+      
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${apiKey}`;
       const payload = {
         contents: [{ parts: [{ text: prompt }] }],
-        systemInstruction: { parts: [{ text: systemInstruction || "Elementary school admin assistant." }] }
+        systemInstruction: { parts: [{ text: systemInstruction || "School admin expert." }] }
       };
-      const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      if (!response.ok) throw new Error('API Error');
-      const result = await response.json();
-      return result.candidates?.[0]?.content?.parts?.[0]?.text;
+      
+      try {
+        const response = await fetch(url, { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify(payload) 
+        });
+        
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error?.message || `서버 에러 발생 (HTTP ${response.status})`);
+        }
+        
+        const result = await response.json();
+        if (result.candidates && result.candidates[0]?.content?.parts?.[0]?.text) {
+            return result.candidates[0].content.parts[0].text;
+        } else {
+            throw new Error("결과를 생성하지 못했습니다. (응답 형식 오류 또는 안전 필터 제한)");
+        }
+      } catch (error) {
+        console.error("Gemini API Error:", error);
+        throw error;
+      }
     };
 
     // --- Utilities ---
@@ -150,17 +172,18 @@
       if (p.includes('교장')) return 1;
       if (p.includes('교감')) return 2;
       if (p.includes('교사') || p.includes('초등교사')) return 3;
+      if (p.includes('행정실장')) return 4;
       return 10;
     };
 
     const TYPE_COLORS = {
-      '연가': 'bg-blue-50 text-blue-700 border-blue-100',
-      '병가': 'bg-red-50 text-red-700 border-red-100',
-      '공가': 'bg-purple-50 text-purple-700 border-purple-100',
-      '출장': 'bg-emerald-50 text-emerald-700 border-emerald-100',
-      '조퇴': 'bg-amber-50 text-amber-700 border-amber-100',
-      '외출': 'bg-orange-50 text-orange-700 border-orange-100',
-      '정상근무': 'bg-slate-50 text-slate-500 border-slate-100'
+      '연가': 'bg-blue-50 text-blue-600 border-blue-100',
+      '병가': 'bg-red-50 text-red-600 border-red-100',
+      '공가': 'bg-purple-50 text-purple-600 border-purple-100',
+      '출장': 'bg-emerald-50 text-emerald-600 border-emerald-100',
+      '조퇴': 'bg-amber-50 text-amber-600 border-amber-100',
+      '외출': 'bg-orange-50 text-orange-600 border-orange-100',
+      '정상근무': 'bg-slate-50 text-slate-400 border-slate-100'
     };
 
     const CALENDAR_COLORS = {
@@ -171,6 +194,7 @@
 
     // --- Main Component ---
     function App() {
+      // (1) 네비게이션 및 기본 데이터
       const [viewMode, setViewMode] = useState('calendar'); 
       const [uploadSubTab, setUploadSubTab] = useState('daily'); 
       const [currentMonth, setCurrentMonth] = useState(new Date());
@@ -179,16 +203,20 @@
       const [events, setEvents] = useState(() => {
         const saved = localStorage.getItem('work_schedule_events');
         if (!saved) return [];
-        try { return JSON.parse(saved).map(e => ({ ...e, start: new Date(e.start), end: new Date(e.end) })); } catch(e) { return []; }
+        try { 
+          return JSON.parse(saved).map(e => ({ 
+            ...e, 
+            start: new Date(e.start), 
+            end: new Date(e.end) 
+          })); 
+        } catch(e) { return []; }
       });
 
-      // 💡 전체 목록 필터 상태 (입력용)
+      // (2) 필터 및 설정 상태 (Lifting Up)
       const [listSearchName, setListSearchName] = useState('');
       const [listSearchType, setListSearchType] = useState('전체');
       const [listSearchStartDate, setListSearchStartDate] = useState('');
       const [listSearchEndDate, setListSearchEndDate] = useState('');
-
-      // 💡 실제 적용된 필터 상태 (조회 버튼 클릭 시 반영)
       const [appliedFilter, setAppliedFilter] = useState({ name: '', type: '전체', start: '', end: '' });
 
       const [orgSelectedDate, setOrgSelectedDate] = useState(formatDate(new Date()));
@@ -212,6 +240,7 @@
 
       const fileInputRef = useRef(null);
 
+      // (3) Effects
       useEffect(() => {
         localStorage.setItem('work_schedule_departments', JSON.stringify(departments));
         localStorage.setItem('work_schedule_staff', JSON.stringify(staff));
@@ -224,6 +253,7 @@
         }
       }, [departments]);
 
+      // (4) Handlers
       const showAlert = (message) => setGlobalAlert({ isOpen: true, message: String(message) });
       const showConfirm = (message, onConfirm) => setGlobalConfirm({ isOpen: true, message: String(message), onConfirm });
 
@@ -234,6 +264,54 @@
         const period = startD === endD ? `${startD} [${startT} ~ ${endT}]` : `${startD} ${startT} ~ ${endD} ${endT}`;
         showAlert(`성명: ${event.name}\n복무: ${event.originalStatus || event.type}\n일시: ${period}\n사유: ${event.details || '-'}${event.location ? `\n장소: ${event.location}` : ''}`);
       };
+
+      const handleInputChange = (e) => {
+        const { name, value } = e.target;
+        setNewEvent(prev => ({ ...prev, [name]: value }));
+      };
+
+      // 💡 [핵심 수정] 모바일(Safari/iOS)에서 확실하게 작동하는 Date 파싱 함수
+      const handleSubmit = (e) => {
+        e.preventDefault();
+        
+        const createSafeDate = (dStr, tStr) => {
+          try {
+            const ds = dStr || formatDate(new Date());
+            const ts = tStr || '00:00';
+            const [y, m, d] = ds.split('-');
+            const [hr, min] = ts.split(':');
+            const parsedDate = new Date(y, m - 1, d, hr, min);
+            return isNaN(parsedDate.getTime()) ? new Date() : parsedDate;
+          } catch(err) {
+            return new Date();
+          }
+        };
+
+        const startDateTime = createSafeDate(newEvent.date, newEvent.startTime);
+        const endDateTime = createSafeDate(newEvent.date, newEvent.endTime);
+        const displayName = newEvent.name || '본인';
+        
+        const newEventObj = {
+          id: Date.now() + Math.random(), 
+          name: String(displayName), 
+          title: String(newEvent.title || `[${displayName}] ${newEvent.type}`),
+          start: startDateTime, 
+          end: endDateTime, 
+          type: String(newEvent.type), 
+          details: String(newEvent.details || ''), 
+          location: String(newEvent.location || '')
+        };
+
+        setEvents(prev => {
+          const filtered = prev.filter(ex => !(ex.name === newEventObj.name && formatDate(ex.start) === formatDate(newEventObj.start) && ex.type === newEventObj.type));
+          return [...filtered, newEventObj];
+        });
+        
+        setIsModalOpen(false);
+        setNewEvent({ name: '', title: '', date: formatDate(new Date()), startTime: '09:00', endTime: '17:00', type: '연가', details: '', location: '' });
+      };
+
+      const deleteEvent = (id) => setEvents(events.filter(event => event.id !== id));
 
       const handleFileUpload = (e) => {
         const file = e.target.files[0]; if (!file) return;
@@ -247,27 +325,21 @@
             if (row) rows.push(row.trim());
             const lines = rows.filter(l => l.length > 0);
             const headers = parseCSVLine(lines[0]).map(h => h.replace(/\s/g, ''));
-            
             const isDaily = headers.some(h => h.includes('근무상황')), isPeriod = headers.some(h => h.includes('종별'));
             if ((uploadSubTab === 'daily' && !isDaily) || (uploadSubTab === 'period' && !isPeriod)) {
               showAlert('선택한 탭과 파일 형식이 일치하지 않습니다.'); setIsSyncing(false); return;
             }
-
             const parsed = [];
             if (uploadSubTab === 'daily') {
               lines.slice(1).forEach(line => {
                 const cur = parseCSVLine(line); const obj = {}; headers.forEach((h, idx) => obj[h] = cur[idx] || '');
-                if (obj['성명'] && obj['근무상황'] !== '정상근무') {
-                  parsed.push({ name: obj['성명'], status: obj['근무상황'], period: obj['기간'], reason: obj['목적지'] || '-', department: obj['부서'], position: obj['직급/직위/직종'] });
-                }
+                if (obj['성명'] && obj['근무상황'] !== '정상근무') parsed.push({ name: obj['성명'], status: obj['근무상황'], period: obj['기간'], reason: obj['목적지'] || '-', department: obj['부서'], position: obj['직급/직위/직종'] });
               });
             } else {
               const nIdx = headers.findIndex(h => h.includes('성명')), pIdx = headers.findIndex(h => h.includes('기간')), tIdx = headers.findIndex(h => h.includes('종별')), rIdx = headers.findIndex(h => h.includes('사유')), dIdx = headers.findIndex(h => h.includes('부서명')), posIdx = headers.findIndex(h => h.includes('직급'));
               lines.slice(1).forEach(line => {
                 const cur = parseCSVLine(line); const rawN = cur[nIdx] || '', name = rawN.split(/[\r\n(]/)[0].trim(), status = cur[tIdx] || '';
-                if (name && status && !status.includes('정상')) {
-                  parsed.push({ name, status, period: cur[pIdx], reason: cur[rIdx] || '-', department: cur[dIdx], position: cur[posIdx] });
-                }
+                if (name && status && !status.includes('정상')) parsed.push({ name, status, period: cur[pIdx], reason: cur[rIdx] || '-', department: cur[dIdx], position: cur[posIdx] });
               });
             }
             setDailyPreviewData(parsed); setSyncMessage(`데이터 ${parsed.length}건 준비됨`);
@@ -279,52 +351,60 @@
       const handleApplyUpdates = () => {
         const existingNames = new Set(staff.map(s => s.name));
         const newOnes = [];
-        dailyPreviewData.forEach(p => {
-          if (!existingNames.has(p.name)) {
-            newOnes.push({ id: (Date.now() + Math.random()).toString(36), name: p.name, position: p.position || '-', department: p.department || departments[0] });
-            existingNames.add(p.name);
-          }
-        });
+        dailyPreviewData.forEach(p => { if (!existingNames.has(p.name)) { newOnes.push({ id: (Date.now() + Math.random()).toString(36), name: String(p.name), position: String(p.position || '-'), department: String(p.department || departments[0]) }); existingNames.add(p.name); } });
         const apply = () => {
-          const newEvents = dailyPreviewData.map((p, i) => {
-            const { start, end } = parseNeisPeriod(p.period);
-            return { id: Date.now() + i, name: p.name, originalStatus: p.status, type: normalizeType(p.status), start, end, details: p.reason, location: p.status.includes('출장') ? p.reason : '' };
-          });
-          setEvents(prev => {
-            let updated = [...prev];
-            newEvents.forEach(ne => updated = updated.filter(ex => !(ex.name === ne.name && formatDate(ex.start) === formatDate(ne.start) && ex.type === ne.type)));
-            return [...updated, ...newEvents];
-          });
+          const newEvents = dailyPreviewData.map((p, i) => { const { start, end } = parseNeisPeriod(p.period); return { id: Date.now() + i, name: String(p.name), originalStatus: String(p.status), type: String(normalizeType(p.status)), start, end, details: String(p.reason), location: p.status.includes('출장') ? String(p.reason) : '' }; });
+          setEvents(prev => { let updated = [...prev]; newEvents.forEach(ne => updated = updated.filter(ex => !(ex.name === ne.name && formatDate(ex.start) === formatDate(ne.start) && ex.type === ne.type))); return [...updated, ...newEvents]; });
           setDailyPreviewData([]); setSyncMessage(''); setViewMode('calendar');
         };
         if (newOnes.length > 0) showConfirm(`신규 근무자 ${newOnes.length}명을 명단에 추가하고 복무를 반영하시겠습니까?`, () => { setStaff([...staff, ...newOnes]); apply(); });
         else apply();
       };
 
-      const generateAiReport = async () => {
+      const generateAiReportFromList = async (filteredData) => {
+        if (!filteredData.length) return showAlert("요약할 데이터가 없습니다.");
         setIsAiLoading(true);
-        const combined = Array.from(new Set([...staff.map(s=>s.name), ...events.map(e=>e.name)]));
-        const activeToday = combined.map(name => {
-           const e = events.find(ev => ev.name === name && formatDate(ev.start) <= orgSelectedDate && formatDate(ev.end) >= orgSelectedDate);
-           return e ? `${name}: ${e.originalStatus || e.type} (${e.details})` : null;
-        }).filter(Boolean).join('\n');
+        const dataStr = filteredData.map(e => `${e.name}: ${e.originalStatus || e.type} (${formatDate(e.start)})`).join('\n');
+        try {
+          const res = await callGemini(`${dataStr}\n\n위 복무 목록을 바탕으로 부재 현황 요약 리포트를 격식있게 작성해줘.`, "School Admin Reporting Bot");
+          setAiReport(res);
+        } catch (e) { 
+          showAlert(`AI 리포트 생성 실패:\n${e.message}`); 
+        } finally { 
+          setIsAiLoading(false); 
+        }
+      };
+
+      const generateAiReportFromOrg = async (staffStatuses) => {
+        const activeToday = staffStatuses.filter(s => s.status !== '정상근무').map(s => `${s.name}(${s.position}): ${s.status} ${s.reason !== '-' ? `(${s.reason})` : ''}`).join('\n');
+        if (!activeToday) return showAlert("선택한 날짜에 부재중인 근무자가 없습니다.");
         
+        setIsAiLoading(true);
         const prompt = `날짜: ${orgSelectedDate}\n다음 부재자 현황을 관리자에게 보고할 정중한 요약 리포트로 작성해 주세요:\n${activeToday}`;
-        try { const res = await callGemini(prompt, "Professional School Admin Expert."); setAiReport(res); } 
-        catch (e) { showAlert("Gemini API 키가 설정에 등록되었는지 확인하세요."); } 
-        finally { setIsAiLoading(false); }
+        try { 
+          const res = await callGemini(prompt, "School Admin Expert."); 
+          setAiReport(res); 
+        } catch (e) { 
+          showAlert(`AI 리포트 생성 실패:\n${e.message}`); 
+        } finally { 
+          setIsAiLoading(false); 
+        }
       };
 
       const polishReasonWithAi = async () => {
-        if (!newEvent.details) return showAlert("사유를 입력해 주세요.");
+        if (!newEvent.details) return showAlert("사유를 먼저 입력하세요.");
         setIsAiLoading(true);
         try {
-          const res = await callGemini(`'${newEvent.details}'를 나이스 복무 행정용어로 품위있게 다듬어줘. 결과만 짧게 출력해.`, "Formal Korean Admin terms polisher.");
-          setNewEvent(prev => ({ ...prev, details: res.replace(/['"]/g, "").trim() }));
-        } catch (e) { showAlert("Gemini API 키를 확인하세요."); } 
-        finally { setIsAiLoading(false); }
+          const res = await callGemini(`'${newEvent.details}' 사유를 나이스 행정용어로 다듬어줘. 결과만 짧게 한 줄로 출력해.`, "Formal Korean terms expert.");
+          setNewEvent(prev => ({ ...prev, details: String(res.replace(/['"]/g, "").trim()) }));
+        } catch (e) { 
+          showAlert(`AI 교정 실패:\n${e.message}`); 
+        } finally { 
+          setIsAiLoading(false); 
+        }
       };
 
+      // --- 💡 Views ---
       const renderCalendar = () => {
         const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
         const firstDay = (y, m) => new Date(y, m, 1).getDay();
@@ -334,8 +414,8 @@
           const dateStr = formatDate(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), d));
           const dayEvents = events.filter(e => formatDate(e.start) <= dateStr && formatDate(e.end) >= dateStr);
           const sorted = [...dayEvents].sort((a,b) => {
-            if (a.type !== b.type) return a.type.localeCompare(b.type, 'ko');
-            return a.name.localeCompare(b.name, 'ko');
+            if (a.type !== b.type) return String(a.type).localeCompare(String(b.type), 'ko');
+            return String(a.name).localeCompare(String(b.name), 'ko');
           });
           days.push(
             <div key={d} className="calendar-day bg-white border border-slate-100 p-3 hover:bg-blue-50/20 transition-colors cursor-pointer" onClick={() => { setNewEvent({...newEvent, date: dateStr}); setIsModalOpen(true); }}>
@@ -353,14 +433,22 @@
         return (
           <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden animate-in fade-in duration-500">
             <div className="p-8 flex items-center justify-between border-b border-slate-100">
-              <h2 className="text-3xl font-bold text-slate-800 tracking-tight"><span>{currentMonth.getFullYear()}</span>년 <span>{currentMonth.getMonth() + 1}</span>월</h2>
+              <h2 className="text-3xl font-semibold text-slate-800 tracking-tight"><span>{currentMonth.getFullYear()}</span>년 <span>{currentMonth.getMonth() + 1}</span>월</h2>
               <div className="flex gap-3">
                 <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()-1, 1))} className="p-3 w-12 h-12 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-custom"><i className="fa-solid fa-chevron-left text-slate-500"></i></button>
                 <button onClick={() => setCurrentMonth(new Date())} className="px-8 py-2 border border-slate-200 rounded-2xl font-semibold hover:bg-slate-50 transition-custom"><span>오늘</span></button>
                 <button onClick={() => setCurrentMonth(new Date(currentMonth.getFullYear(), currentMonth.getMonth()+1, 1))} className="p-3 w-12 h-12 border border-slate-200 rounded-2xl hover:bg-slate-50 transition-custom"><i className="fa-solid fa-chevron-right text-slate-500"></i></button>
               </div>
             </div>
-            <div className="grid grid-cols-7 bg-slate-50/50 text-center py-4 border-b border-slate-100 text-xs font-bold tracking-widest text-slate-400">
+            <div className="px-8 py-4 bg-slate-50/30 flex flex-wrap gap-x-6 gap-y-2 border-b border-slate-100">
+              {Object.entries(CALENDAR_COLORS).map(([label, colorClass]) => (
+                <div key={label} className="flex items-center gap-2">
+                  <div className={`w-4 h-4 rounded-md ${colorClass} shadow-sm`}></div>
+                  <span className="text-sm font-medium text-slate-500"><span>{label}</span></span>
+                </div>
+              ))}
+            </div>
+            <div className="grid grid-cols-7 bg-slate-50/50 text-center py-4 border-b border-slate-100 text-xs font-bold tracking-widest text-slate-400 uppercase">
               {['SUN','MON','TUE','WED','THU','FRI','SAT'].map(d => <div key={d} className={d==='SUN'?'text-red-400':d==='SAT'?'text-blue-400':''}><span>{d}</span></div>)}
             </div>
             <div className="grid grid-cols-7">{days}</div>
@@ -369,33 +457,25 @@
       };
 
       const renderListView = () => {
-        // 💡 조회 버튼을 눌렀을 때만 필터링 수행
         const filtered = events.filter(e => {
           const matchN = e.name.includes(appliedFilter.name);
           const matchT = appliedFilter.type === '전체' || e.type === appliedFilter.type;
-          const eventStart = formatDate(e.start);
-          const eventEnd = formatDate(e.end);
-          const filterStart = appliedFilter.start;
-          const filterEnd = appliedFilter.end;
-          const matchD = (!filterStart || eventEnd >= filterStart) && (!filterEnd || eventStart <= filterEnd);
+          const eventStart = formatDate(e.start), eventEnd = formatDate(e.end);
+          const matchD = (!appliedFilter.start || eventEnd >= appliedFilter.start) && (!appliedFilter.end || eventStart <= appliedFilter.end);
           return matchN && matchT && matchD;
-        }).sort((a,b) => b.start - a.start);
-
-        const handleSearch = () => {
-          setAppliedFilter({ name: listSearchName, type: listSearchType, start: listSearchStartDate, end: listSearchEndDate });
-        };
-
-        const handleReset = () => {
-          setListSearchName(''); setListSearchType('전체'); setListSearchStartDate(''); setListSearchEndDate('');
-          setAppliedFilter({ name: '', type: '전체', start: '', end: '' });
-        };
+        }).sort((a,b) => {
+          // 안정적인 Date 정렬을 위해 getTime 사용
+          const timeA = a.start instanceof Date && !isNaN(a.start) ? a.start.getTime() : 0;
+          const timeB = b.start instanceof Date && !isNaN(b.start) ? b.start.getTime() : 0;
+          return timeB - timeA;
+        });
 
         return (
           <div className="space-y-8 animate-in fade-in duration-500">
             <div className="bg-white p-8 rounded-[2rem] shadow-sm border border-slate-200 flex flex-wrap gap-6 items-end">
                <div className="flex-1 min-w-[200px] space-y-2">
                   <label className="text-sm font-semibold text-slate-400 ml-1"><span>성명</span></label>
-                  <input type="text" value={listSearchName} onChange={e => setListSearchName(e.target.value)} placeholder="검색어 입력" className="w-full border border-slate-200 rounded-2xl px-5 text-base focus:ring-2 focus:ring-blue-500 outline-none transition-all"/>
+                  <input type="text" value={listSearchName} onChange={e => setListSearchName(e.target.value)} placeholder="성명 입력" className="w-full border border-slate-200 rounded-2xl px-5 text-base focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium"/>
                </div>
                <div className="w-full sm:w-48 space-y-2">
                   <label className="text-sm font-semibold text-slate-400 ml-1"><span>종류</span></label>
@@ -415,37 +495,77 @@
                      <input type="date" value={listSearchEndDate} onChange={e => setListSearchEndDate(e.target.value)} className="w-full border border-slate-200 rounded-2xl px-4 text-base focus:ring-2 focus:ring-blue-500 outline-none transition-all font-medium"/>
                   </div>
                </div>
-               <div className="flex gap-2">
-                  <button onClick={handleSearch} className="px-8 py-3 bg-blue-600 text-white rounded-2xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-100 active:scale-95 flex items-center gap-2">
-                    <i className="fa-solid fa-magnifying-glass"></i><span>조회</span>
-                  </button>
-                  <button onClick={handleReset} className="px-5 py-3 text-slate-400 hover:text-slate-600 transition-custom border border-slate-100 rounded-2xl">
-                    <i className="fa-solid fa-rotate-left"></i>
-                  </button>
+               <div className="flex gap-2 w-full sm:w-auto mt-4 sm:mt-0">
+                  <button onClick={() => setAppliedFilter({ name: listSearchName, type: listSearchType, start: listSearchStartDate, end: listSearchEndDate })} className="flex-1 sm:flex-none px-8 py-3 bg-blue-600 text-white rounded-2xl font-semibold hover:bg-blue-700 transition-all shadow-lg active:scale-95 flex items-center justify-center gap-2"><i className="fa-solid fa-magnifying-glass"></i><span>조회</span></button>
+                  <button onClick={() => { setListSearchName(''); setListSearchType('전체'); setListSearchStartDate(''); setListSearchEndDate(''); setAppliedFilter({ name: '', type: '전체', start: '', end: '' }); }} className="px-5 py-3 text-slate-400 border border-slate-100 rounded-2xl hover:bg-slate-50"><i className="fa-solid fa-rotate-left"></i></button>
                </div>
             </div>
 
+            {aiReport && (
+              <div className="bg-indigo-50 border border-indigo-100 rounded-[2rem] p-8 animate-in slide-in-from-top-4 duration-500 relative group shadow-inner">
+                 <div className="flex items-center gap-3 mb-4 font-semibold text-indigo-900"><i className="fa-solid fa-brain text-2xl"></i><span>✨ AI 복무 요약 리포트</span></div>
+                 <p className="text-lg text-indigo-800 leading-relaxed whitespace-pre-wrap font-medium">{String(aiReport)}</p>
+                 <button onClick={() => setAiReport("")} className="absolute top-6 right-6 text-indigo-300 hover:text-indigo-600 p-2"><i className="fa-solid fa-xmark text-2xl"></i></button>
+              </div>
+            )}
+
             <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden">
-               <div className="p-8 border-b border-slate-100 bg-slate-50/30 flex items-center justify-between">
-                  <h3 className="text-xl font-bold text-slate-800"><span>복무 기록 내역 ({filtered.length}건)</span></h3>
-                  <span className="text-sm text-slate-400 font-medium"><span>최신순 정렬</span></span>
+               <div className="p-8 border-b border-slate-100 bg-slate-50/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                  <h3 className="text-xl font-semibold text-slate-800"><span>복무 기록 내역 ({filtered.length}건)</span></h3>
+                  <div className="flex items-center gap-3 w-full sm:w-auto">
+                    <button 
+                      onClick={() => generateAiReportFromList(filtered)} 
+                      disabled={isAiLoading}
+                      className="flex-1 sm:flex-none px-6 py-2 bg-indigo-600 text-white rounded-xl text-sm font-semibold hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-lg shadow-indigo-100 transition-all"
+                    >
+                      {isAiLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-sparkles"></i>}<span>AI 요약</span>
+                    </button>
+                    <span className="text-xs text-slate-400 font-medium whitespace-nowrap"><span>최신순 정렬</span></span>
+                  </div>
                </div>
-               <div className="divide-y divide-slate-100">
-                  {filtered.length === 0 ? <div className="p-24 text-center text-slate-300 font-medium text-lg"><span>기록이 없습니다. 상단 조회 버튼을 누르거나 필터를 변경해 주세요.</span></div> : filtered.map(e => (
-                    <div key={e.id} className="p-8 flex flex-col sm:flex-row justify-between items-start sm:items-center hover:bg-slate-50 transition-custom group gap-6 border-b border-gray-50 last:border-0">
-                       <div className="flex-1 w-full">
-                          <div className="flex items-center gap-4 mb-4">
-                             <span className={`px-4 py-1.5 rounded-xl border-2 text-xs font-semibold border ${TYPE_COLORS[e.type] || 'bg-slate-50'}`}><span>{String(e.type)}</span></span>
-                             <span className="font-semibold text-xl text-slate-800 tracking-tight truncate">{String(e.name)} <span className="font-medium text-slate-300 text-sm ml-3">/ {String(e.details || '-')}</span></span>
-                          </div>
-                          <div className="text-sm sm:text-base text-slate-400 flex flex-wrap items-center gap-6 sm:gap-10 font-semibold tracking-tight">
-                             <span className="flex items-center gap-3 whitespace-nowrap"><i className="fa-regular fa-clock text-lg text-blue-300"></i> <span>{formatDate(e.start)} {formatTime(e.start)} ~ {formatDate(e.end)} {formatTime(e.end)}</span></span>
-                             {e.location && <span className="flex items-center gap-3 px-4 py-1.5 bg-green-50 text-green-600 rounded-xl"><i className="fa-solid fa-location-dot text-lg"></i> <span>{String(e.location)}</span></span>}
-                          </div>
-                       </div>
-                       <button onClick={() => showConfirm(`해당 기록을 삭제할까요?`, () => deleteEvent(e.id))} className="w-full sm:w-auto text-center text-gray-200 hover:text-red-500 p-4 transition-custom active:scale-90"><i className="fa-solid fa-trash-can text-2xl"></i></button>
-                    </div>
-                  ))}
+               
+               <div className="overflow-x-auto">
+                 <table className="min-w-full divide-y divide-slate-100 text-base">
+                    <thead className="bg-slate-50/20 text-[11px] font-bold text-slate-400 uppercase tracking-widest">
+                       <tr>
+                         <th className="px-8 py-5 text-center whitespace-nowrap"><span>종류</span></th>
+                         <th className="px-8 py-5 text-center whitespace-nowrap"><span>성명</span></th>
+                         <th className="px-8 py-5 text-center whitespace-nowrap"><span>복무 기간</span></th>
+                         <th className="px-8 py-5 text-left whitespace-nowrap"><span>사유</span></th>
+                         <th className="px-8 py-5 text-center whitespace-nowrap"><span>관리</span></th>
+                       </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 bg-white">
+                       {filtered.length === 0 ? (
+                         <tr><td colSpan="5" className="px-8 py-24 text-center text-slate-300 font-medium text-lg"><span>조회된 기록이 없습니다. 상단에서 필터를 설정하고 조회를 눌러주세요.</span></td></tr>
+                       ) : filtered.map(e => (
+                         <tr key={e.id} className="hover:bg-slate-50/50 transition-custom">
+                            <td className="px-8 py-5 text-center whitespace-nowrap">
+                               <span className={`px-4 py-1 rounded-xl border-2 text-xs font-semibold ${TYPE_COLORS[e.type] || 'bg-slate-50'}`}><span>{String(e.type)}</span></span>
+                            </td>
+                            <td className="px-8 py-5 text-center whitespace-nowrap">
+                               <span className="font-semibold text-slate-800 text-xl"><span>{String(e.name)}</span></span>
+                            </td>
+                            <td className="px-8 py-5 text-center text-slate-500 font-bold whitespace-nowrap">
+                               <div className="flex flex-col text-sm">
+                                 <span>{formatDate(e.start)} {formatTime(e.start)}</span>
+                                 <span className="text-slate-300 font-normal">~</span>
+                                 <span>{formatDate(e.end)} {formatTime(e.end)}</span>
+                               </div>
+                            </td>
+                            <td className="px-8 py-5 text-slate-600 font-medium min-w-[200px]">
+                               <div className="flex flex-col gap-1">
+                                  <span className="text-lg"><span>{String(e.details || '-')}</span></span>
+                                  {e.location && <span className="text-xs text-emerald-600 flex items-center gap-1"><i className="fa-solid fa-location-dot"></i><span>{String(e.location)}</span></span>}
+                               </div>
+                            </td>
+                            <td className="px-8 py-5 text-center whitespace-nowrap">
+                               <button onClick={() => showConfirm(`해당 기록을 삭제할까요?`, () => deleteEvent(e.id))} className="text-slate-200 hover:text-red-500 p-4 transition-custom active:scale-90"><i className="fa-solid fa-trash-can text-2xl"></i></button>
+                            </td>
+                         </tr>
+                       ))}
+                    </tbody>
+                 </table>
                </div>
             </div>
           </div>
@@ -458,7 +578,7 @@
           .sort((a,b) => {
              const wA = getPositionWeight(a.position), wB = getPositionWeight(b.position);
              if(wA !== wB) return wA - wB;
-             return a.name.localeCompare(b.name, 'ko');
+             return String(a.name).localeCompare(String(b.name), 'ko');
           });
         const records = combined.map(s => {
           const active = events.find(e => e.name === s.name && isEventOnDate(e, orgSelectedDate));
@@ -471,43 +591,43 @@
             <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-8">
                <div className="flex items-center gap-6 w-full xl:w-auto">
                   <div className="p-4 bg-blue-50 text-blue-600 rounded-3xl flex items-center justify-center text-3xl"><i className="fa-solid fa-building"></i></div>
-                  <div><h3 className="text-2xl font-bold"><span>기관 복무 현황</span></h3><p className="text-sm text-slate-400 font-medium mt-1"><span>조회 일자의 실시간 근무 상태입니다.</span></p></div>
+                  <div><h3 className="text-2xl font-semibold text-slate-800">기관 복무 현황</h3><p className="text-sm text-slate-400 font-medium mt-1">조회 일자의 실시간 근무 상태입니다.</p></div>
                </div>
                <div className="flex flex-wrap items-center gap-4 w-full xl:w-auto justify-start xl:justify-end">
                   <input type="date" value={orgSelectedDate} onChange={e => setOrgSelectedDate(e.target.value)} className="border-2 border-slate-100 rounded-2xl p-3 text-lg font-bold focus:border-blue-500 outline-none transition-custom shadow-sm"/>
-                  <button onClick={() => setOrgFilterStatus('전체')} className={`px-6 py-3 rounded-2xl border-2 transition-all text-sm font-bold ${orgFilterStatus === '전체' ? 'bg-slate-800 text-white border-slate-800 shadow-lg shadow-slate-200' : 'bg-white text-slate-500 border-slate-100 hover:bg-slate-50'}`}><span>전체</span></button>
-                  <button onClick={() => setOrgFilterStatus('부재중')} className={`px-6 py-3 rounded-2xl border-2 transition-all text-sm font-bold ${orgFilterStatus === '부재중' ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-100' : 'bg-white text-slate-500 border-slate-100 hover:bg-slate-50'}`}><span>부재중</span></button>
-                  <button onClick={generateAiReport} disabled={isAiLoading} className="flex items-center gap-3 px-8 py-3 rounded-2xl bg-indigo-600 text-white text-sm font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50">
+                  <button onClick={() => setOrgFilterStatus('전체')} className={`px-6 py-3 rounded-2xl border-2 transition-all text-sm font-semibold ${orgFilterStatus === '전체' ? 'bg-slate-800 text-white border-slate-800 shadow-lg shadow-slate-200' : 'bg-white text-slate-500 border-slate-100 hover:bg-slate-50'}`}>전체</button>
+                  <button onClick={() => setOrgFilterStatus('부재중')} className={`px-6 py-3 rounded-2xl border-2 transition-all text-sm font-semibold ${orgFilterStatus === '부재중' ? 'bg-orange-500 text-white border-orange-500 shadow-lg shadow-orange-100' : 'bg-white text-slate-500 border-slate-100 hover:bg-slate-50'}`}>부재중</button>
+                  <button onClick={() => generateAiReportFromOrg(records)} disabled={isAiLoading} className="flex items-center gap-3 px-8 py-3 rounded-2xl bg-indigo-600 text-white text-sm font-bold shadow-lg shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-50">
                     {isAiLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-sparkles"></i>}<span>✨ AI 요약</span>
                   </button>
                </div>
             </div>
             {aiReport && (
-              <div className="bg-indigo-50 border border-indigo-100 rounded-[2rem] p-8 animate-in slide-in-from-top-4 duration-500 relative group shadow-inner">
-                 <div className="flex items-center gap-3 mb-4"><i className="fa-solid fa-brain text-2xl text-indigo-600"></i><h4 className="font-bold text-indigo-900 text-lg"><span>AI 지능형 현황 분석</span></h4></div>
-                 <p className="text-lg text-indigo-800 leading-relaxed whitespace-pre-wrap">{String(aiReport)}</p>
+              <div className="bg-indigo-50 border border-indigo-100 rounded-[2rem] p-8 animate-in slide-in-from-top-4 duration-500 relative group shadow-inner text-lg">
+                 <div className="flex items-center gap-3 mb-4 font-bold text-indigo-900"><i className="fa-solid fa-brain"></i><span>AI 지능형 현황 분석</span></div>
+                 <p className="text-indigo-800 leading-relaxed whitespace-pre-wrap font-medium">{String(aiReport)}</p>
                  <button onClick={() => setAiReport("")} className="absolute top-6 right-6 text-indigo-300 hover:text-indigo-600 p-2"><i className="fa-solid fa-xmark text-2xl"></i></button>
               </div>
             )}
             <div className="bg-white rounded-[2.5rem] shadow-sm border border-slate-200 overflow-hidden overflow-x-auto">
-               <table className="min-w-full divide-y divide-slate-100">
+               <table className="min-w-full divide-y divide-slate-100 text-lg">
                   <thead className="bg-slate-50/50 text-xs font-bold text-slate-400 uppercase tracking-widest">
-                     <tr><th className="px-8 py-6 text-left whitespace-nowrap"><span>성명 및 직위</span></th><th className="px-8 py-6 text-center whitespace-nowrap"><span>상태</span></th><th className="px-8 py-6 text-center whitespace-nowrap"><span>기간</span></th><th className="px-8 py-6 text-left whitespace-nowrap"><span>비고</span></th></tr>
+                     <tr><th className="px-8 py-6 text-left whitespace-nowrap">성명 및 직위</th><th className="px-8 py-6 text-center whitespace-nowrap">상태</th><th className="px-8 py-6 text-center whitespace-nowrap">기간</th><th className="px-8 py-6 text-left whitespace-nowrap">비고</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 bg-white">
                      {filtered.map((r, i) => (
                        <tr key={i} className="hover:bg-blue-50/5 transition-custom">
                           <td className="px-8 py-6 whitespace-nowrap">
                              <div className="flex flex-col">
-                                <span className="text-xl font-semibold text-slate-800"><span>{r.name}</span></span>
-                                <span className="text-[11px] font-bold text-slate-400 uppercase mt-1 tracking-wider"><span>{r.position}</span></span>
+                                <span className="font-semibold text-slate-800 text-xl">{String(r.name)}</span>
+                                <span className="text-[11px] font-bold text-slate-400 uppercase mt-1 tracking-wider">{String(r.position)}</span>
                              </div>
                           </td>
                           <td className="px-8 py-6 text-center whitespace-nowrap">
-                             <span className={`px-4 py-1.5 rounded-xl border-2 text-[11px] font-bold ${TYPE_COLORS[r.status] || 'bg-slate-50 text-slate-400 border-slate-100'}`}><span>{r.status}</span></span>
+                             <span className={`px-4 py-1.5 rounded-xl border-2 text-[11px] font-bold ${TYPE_COLORS[r.status] || 'bg-slate-50 text-slate-400 border-slate-100'}`}>{String(r.status)}</span>
                           </td>
-                          <td className="px-8 py-6 text-center text-slate-500 font-bold whitespace-nowrap"><span>{r.period}</span></td>
-                          <td className="px-8 py-6 text-slate-600 text-lg max-w-[400px] truncate"><span>{r.reason}</span></td>
+                          <td className="px-8 py-6 text-center text-slate-500 font-bold whitespace-nowrap">{String(r.period)}</td>
+                          <td className="px-8 py-6 text-slate-600 font-medium max-w-[400px] truncate">{String(r.reason)}</td>
                        </tr>
                      ))}
                   </tbody>
@@ -521,8 +641,8 @@
            <div className="space-y-10 pb-20 animate-in fade-in duration-500">
               <div className="bg-white p-8 rounded-[2.5rem] shadow-sm border border-slate-200">
                  <div className="flex justify-between items-center mb-8">
-                    <h4 className="text-xl font-bold text-indigo-700 flex items-center gap-3"><i className="fa-solid fa-key"></i><span>Gemini AI API 설정</span></h4>
-                    <button onClick={() => showAlert(`✨ Gemini API 발급 안내\n\n1. Google AI Studio(aistudio.google.com) 접속\n2. 'Get API key' 메뉴 클릭\n3. 'Create API key in new project' 클릭\n4. 생성된 키를 여기에 입력`)} className="text-sm font-bold text-indigo-400 border border-indigo-50 px-4 py-2 rounded-xl hover:bg-indigo-50 transition-custom flex items-center gap-2"><i className="fa-solid fa-circle-info"></i><span>키 발급 가이드</span></button>
+                    <h4 className="text-xl font-semibold text-indigo-700 flex items-center gap-3"><i className="fa-solid fa-key"></i><span>Gemini AI API 설정</span></h4>
+                    <button onClick={() => showAlert(`✨ Gemini API 발급 안내\n\n1. Google AI Studio(aistudio.google.com) 접속\n2. 'Get API key' 메뉴 클릭\n3. 'Create API key in new project' 클릭\n4. 생성된 키를 여기에 입력`)} className="text-sm font-semibold text-indigo-400 border border-indigo-50 px-4 py-2 rounded-xl hover:bg-indigo-50 transition-custom flex items-center gap-2"><i className="fa-solid fa-circle-info"></i><span>키 발급 가이드</span></button>
                  </div>
                  <div className="flex gap-4">
                     <input type="password" value={settingsGeminiKey} onChange={e => setSettingsGeminiKey(e.target.value)} placeholder="API Key 입력" className="flex-1 border-2 border-slate-100 rounded-2xl px-5 text-lg outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"/>
@@ -531,37 +651,38 @@
               </div>
               <div className="bg-white rounded-[3rem] shadow-sm border border-slate-200 overflow-hidden">
                  <div className="p-10 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-center bg-slate-50/30 gap-6">
-                    <h3 className="text-3xl font-bold text-slate-800"><span>조직도 및 명단 설정</span></h3>
+                    <h3 className="text-3xl font-semibold text-slate-800"><span>조직도 및 명단 설정</span></h3>
                     <div className="flex gap-3">
-                       <button onClick={() => { const s = [...staff].sort((a,b)=>{ const wA=getPositionWeight(a.position),wB=getPositionWeight(b.position); if(wA!==wB) return wA-wB; return a.name.localeCompare(b.name,'ko'); }); setStaff(s); showAlert('직위 및 가나다 순으로 정렬되었습니다.'); }} className="px-6 py-3 bg-blue-50 text-blue-600 rounded-2xl text-sm font-bold hover:bg-blue-100 transition-custom border border-blue-100 flex items-center gap-2"><i className="fa-solid fa-arrow-down-a-z"></i><span>자동 정렬</span></button>
-                       <button onClick={() => showConfirm("데이터를 완전히 삭제하고 초기화할까요?", () => { localStorage.clear(); window.location.reload(); })} className="px-6 py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold hover:bg-red-100 transition-custom border border-red-100"><span>전체 초기화</span></button>
+                       <button onClick={() => { setStaff([...staff].sort((a,b)=>String(a.name).localeCompare(String(b.name),'ko'))); showAlert('이름순 정렬 완료'); }} className="px-6 py-3 bg-white text-slate-600 rounded-2xl text-sm font-semibold border border-slate-200 hover:bg-slate-50 transition-custom"><span>이름순 정렬</span></button>
+                       <button onClick={() => { setStaff([...staff].sort((a,b)=>{ const wA=getPositionWeight(a.position),wB=getPositionWeight(b.position); if(wA!==wB) return wA-wB; return String(a.name).localeCompare(String(b.name),'ko'); })); showAlert('직위순 정렬 완료'); }} className="px-6 py-3 bg-blue-50 text-blue-600 rounded-2xl text-sm font-semibold border border-blue-100 hover:bg-blue-100 transition-custom"><span>직위순 정렬</span></button>
+                       <button onClick={() => showConfirm("데이터를 완전히 삭제하고 초기화할까요?", () => { localStorage.clear(); window.location.reload(); })} className="px-6 py-3 bg-red-50 text-red-500 rounded-2xl text-sm font-bold border border-red-100 hover:bg-red-100 transition-custom"><span>전체 초기화</span></button>
                     </div>
                  </div>
                  <div className="p-10 space-y-12">
                     <div className="flex gap-4">
-                       <input type="text" value={settingsNewDept} onChange={e => setSettingsNewDept(e.target.value)} placeholder="새 부서명 (예: 1학년부, 행정실)" className="flex-1 border border-slate-200 rounded-2xl px-5 text-lg outline-none focus:ring-2 focus:ring-blue-500"/>
-                       <button onClick={() => { if(settingsNewDept.trim() && !departments.includes(settingsNewDept.trim())){ setDepartments([...departments, settingsNewDept.trim()]); setSettingsNewDept(''); } }} className="bg-slate-900 text-white px-12 rounded-2xl font-bold hover:bg-slate-800 transition-custom shadow-lg text-lg"><span>부서 추가</span></button>
+                       <input type="text" value={settingsNewDept} onChange={e => setSettingsNewDept(e.target.value)} placeholder="새 부서명 (예: 교무실)" className="flex-1 border border-slate-200 rounded-2xl px-5 text-lg outline-none focus:ring-2 focus:ring-blue-500 font-medium"/>
+                       <button onClick={() => { if(settingsNewDept.trim() && !departments.includes(settingsNewDept.trim())){ setDepartments([...departments, settingsNewDept.trim()]); setSettingsNewDept(''); } }} className="bg-slate-900 text-white px-12 rounded-2xl font-semibold hover:bg-slate-800 transition-custom shadow-lg text-lg"><span>부서 추가</span></button>
                     </div>
                     {departments.map(dept => (
-                      <div key={dept} className="border border-slate-100 rounded-[2.5rem] overflow-hidden">
+                      <div key={dept} className="border border-slate-100 rounded-[2.5rem] overflow-hidden mb-6">
                          <div className="bg-slate-50 px-8 py-5 border-b border-slate-100 flex justify-between items-center">
-                            <span className="font-bold text-slate-700 text-xl">{dept}</span>
+                            <span className="font-semibold text-slate-700 text-xl">{String(dept)}</span>
                             <button onClick={() => showConfirm(`부서를 삭제하시겠습니까? 소속 인원도 삭제됩니다.`, () => { setDepartments(departments.filter(d=>d!==dept)); setStaff(staff.filter(s=>s.department!==dept)); })} className="text-slate-300 hover:text-red-500 p-2"><i className="fa-solid fa-trash-can text-xl"></i></button>
                          </div>
                          <div className="p-6 bg-slate-50/20 border-b border-slate-100">
-                            <form onSubmit={e => { e.preventDefault(); if(settingsNewStaff.name.trim()){ setStaff([...staff, { id: Date.now().toString(), department: dept, position: settingsNewStaff.position || '-', name: settingsNewStaff.name.trim() }]); setSettingsNewStaff({ name:'', position:'', department:dept }); } }} className="flex flex-col sm:flex-row gap-4">
-                               <input type="text" value={settingsNewStaff.department === dept ? settingsNewStaff.position : ''} onChange={e => setSettingsNewStaff({...settingsNewStaff, position:e.target.value, department:dept})} placeholder="직위 (예: 교사, 7급)" className="w-full sm:w-48 border border-slate-100 rounded-2xl px-5 text-base bg-white font-bold"/>
-                               <input type="text" value={settingsNewStaff.department === dept ? settingsNewStaff.name : ''} onChange={e => setSettingsNewStaff({...settingsNewStaff, name:e.target.value, department:dept})} placeholder="성명 입력" className="flex-1 border border-slate-100 rounded-2xl px-5 text-base bg-white font-bold"/>
-                               <button type="submit" className="bg-blue-600 text-white px-10 rounded-2xl font-bold hover:bg-blue-700 shadow-xl shadow-blue-50 transition-custom text-base"><span>근무자 추가</span></button>
+                            <form onSubmit={e => { e.preventDefault(); if(settingsNewStaff.name.trim()){ setStaff([...staff, { id: Date.now().toString() + Math.random(), department: dept, position: settingsNewStaff.position || '-', name: settingsNewStaff.name.trim() }]); setSettingsNewStaff({ name:'', position:'', department:dept }); } }} className="flex flex-col sm:flex-row gap-4">
+                               <input type="text" value={settingsNewStaff.department === dept ? settingsNewStaff.position : ''} onChange={e => setSettingsNewStaff({...settingsNewStaff, position:e.target.value, department:dept})} placeholder="직위 (교사 등)" className="w-full sm:w-48 border border-slate-100 rounded-2xl px-5 text-base bg-white font-semibold"/>
+                               <input type="text" value={settingsNewStaff.department === dept ? settingsNewStaff.name : ''} onChange={e => setSettingsNewStaff({...settingsNewStaff, name:e.target.value, department:dept})} placeholder="성명 입력" className="flex-1 border border-slate-100 rounded-2xl px-5 text-base bg-white font-semibold"/>
+                               <button type="submit" className="bg-blue-600 text-white px-10 rounded-2xl font-semibold hover:bg-blue-700 shadow-xl shadow-blue-50 transition-custom text-base"><span>추가</span></button>
                             </form>
                          </div>
                          <ul className="divide-y divide-slate-50">
                             {staff.filter(s => s.department === dept).map((s, idx, arr) => (
                               <li key={s.id} className="px-8 py-5 flex justify-between items-center bg-white hover:bg-slate-50/30 transition-custom">
                                  {settingsEditingStaffId === s.id ? (
-                                   <div className="flex flex-1 gap-4">
-                                      <input type="text" value={settingsEditStaffData.position} onChange={e => setSettingsEditStaffData({...settingsEditStaffData, position:e.target.value})} className="w-40 border-2 border-slate-100 rounded-2xl px-4 text-base font-bold"/>
-                                      <input type="text" value={settingsEditStaffData.name} onChange={e => setSettingsEditStaffData({...settingsEditStaffData, name:e.target.value})} className="flex-1 border-2 border-slate-100 rounded-2xl px-4 text-base font-bold"/>
+                                   <div className="flex flex-1 gap-4 text-base">
+                                      <input type="text" value={settingsEditStaffData.position} onChange={e => setSettingsEditStaffData({...settingsEditStaffData, position:e.target.value})} className="w-40 border-2 border-slate-100 rounded-2xl px-4 font-semibold"/>
+                                      <input type="text" value={settingsEditStaffData.name} onChange={e => setSettingsEditStaffData({...settingsEditStaffData, name:e.target.value})} className="flex-1 border-2 border-slate-100 rounded-2xl px-4 font-semibold"/>
                                       <div className="flex gap-2">
                                          <button onClick={() => { setStaff(staff.map(i => i.id === s.id ? { ...i, name: settingsEditStaffData.name.trim(), position: settingsEditStaffData.position.trim() } : i)); setSettingsEditingStaffId(null); }} className="bg-emerald-600 text-white px-6 py-2 rounded-2xl font-bold transition-custom text-sm"><span>저장</span></button>
                                          <button onClick={() => setSettingsEditingStaffId(null)} className="bg-slate-100 text-slate-500 px-6 py-2 rounded-2xl font-bold transition-custom text-sm"><span>취소</span></button>
@@ -570,11 +691,11 @@
                                  ) : (
                                    <>
                                      <div className="flex items-center gap-6">
-                                        <span className="w-32 sm:w-40 text-center text-[12px] font-bold text-blue-700 bg-blue-50 py-2 rounded-xl border border-blue-100 truncate shadow-sm uppercase"><span>{s.position}</span></span>
-                                        <span className="text-xl font-medium text-slate-800"><span>{s.name}</span></span>
+                                        <span className="w-32 sm:w-40 text-center text-[12px] font-semibold text-blue-700 bg-blue-50 py-2 rounded-xl border border-blue-100 truncate shadow-sm uppercase"><span>{String(s.position)}</span></span>
+                                        <span className="text-xl font-medium text-slate-800"><span>{String(s.name)}</span></span>
                                      </div>
                                      <div className="flex items-center gap-2">
-                                        <div className="flex border border-slate-100 rounded-2xl overflow-hidden mr-3">
+                                        <div className="flex border border-slate-100 rounded-2xl overflow-hidden mr-3 shadow-sm">
                                            <button onClick={() => { const i=staff.findIndex(item=>item.id===s.id); if(i>0){ const n=[...staff]; [n[i],n[i-1]]=[n[i-1],n[i]]; setStaff(n); }}} disabled={idx===0} className="px-4 py-2 hover:bg-slate-50 disabled:opacity-20"><i className="fa-solid fa-chevron-up text-xs"></i></button>
                                            <button onClick={() => { const i=staff.findIndex(item=>item.id===s.id); if(i<staff.length-1){ const n=[...staff]; [n[i],n[i+1]]=[n[i+1],n[i]]; setStaff(n); }}} disabled={idx===arr.length-1} className="px-4 py-2 border-l border-slate-100 hover:bg-slate-50 disabled:opacity-20"><i className="fa-solid fa-chevron-down text-xs"></i></button>
                                         </div>
@@ -598,41 +719,41 @@
           <div className="bg-slate-50 p-8 border-b border-slate-100 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-8">
             <div className="flex items-center gap-6">
               <div className="p-5 bg-blue-600 text-white rounded-3xl flex items-center justify-center text-3xl shadow-xl shadow-blue-100"><i className="fa-solid fa-file-arrow-up"></i></div>
-              <div><h3 className="text-2xl font-bold"><span>복무 데이터 대량 업로드</span></h3><p className="text-sm text-slate-400 font-medium mt-1"><span>나이스(NEIS)에서 다운로드한 CSV 파일을 일괄 반영합니다.</span></p></div>
+              <div><h3 className="text-2xl font-semibold">복무 데이터 대량 업로드</h3><p className="text-sm text-slate-400 font-medium mt-1">나이스 CSV 파일을 반영합니다.</p></div>
             </div>
             <div className="flex bg-slate-200/50 p-2 rounded-2xl w-full sm:w-auto overflow-x-auto hide-scrollbar shadow-inner">
-              <button onClick={() => {setUploadSubTab('daily'); setDailyPreviewData([]); setSyncMessage('');}} className={`whitespace-nowrap px-8 py-3 text-sm font-bold rounded-xl transition-all ${uploadSubTab === 'daily' ? 'bg-white shadow-lg text-blue-600' : 'text-gray-500'}`}><span>일일 현황</span></button>
-              <button onClick={() => {setUploadSubTab('period'); setDailyPreviewData([]); setSyncMessage('');}} className={`whitespace-nowrap px-8 py-3 text-sm font-bold rounded-xl transition-all ${uploadSubTab === 'period' ? 'bg-white shadow-lg text-blue-600' : 'text-gray-500'}`}><span>기간별 현황</span></button>
+              <button onClick={() => {setUploadSubTab('daily'); setDailyPreviewData([]); setSyncMessage('');}} className={`whitespace-nowrap px-8 py-3 text-sm font-semibold rounded-xl transition-all ${uploadSubTab === 'daily' ? 'bg-white shadow-lg text-blue-600' : 'text-gray-500'}`}><span>일일 현황</span></button>
+              <button onClick={() => {setUploadSubTab('period'); setDailyPreviewData([]); setSyncMessage('');}} className={`whitespace-nowrap px-8 py-3 text-sm font-semibold rounded-xl transition-all ${uploadSubTab === 'period' ? 'bg-white shadow-lg text-blue-600' : 'text-gray-500'}`}><span>기간별 현황</span></button>
             </div>
           </div>
           <div className="py-24 flex flex-col items-center justify-center bg-blue-50/10 border-b border-slate-100 border-dashed m-8 rounded-[3rem] border-4">
-            <p className="text-lg font-bold text-slate-700 mb-3 text-center px-6"><span>{uploadSubTab === 'daily' ? '[일일근무상황조회] 화면의 파일을 선택하세요.' : '[근무상황관리] 또는 [기간별복무조회] 파일을 선택하세요.'}</span></p>
-            <p className="text-sm text-slate-400 mb-12 text-center px-8 leading-relaxed"><span>모든 연도와 월의 데이터가 정확히 처리됩니다. 동일 날짜/유형은 덮어쓰기 됩니다.</span></p>
+            <p className="text-lg font-semibold text-slate-700 mb-3 text-center px-6"><span>{uploadSubTab === 'daily' ? '[일일근무상황조회] 화면의 파일을 선택하세요.' : '[근무상황관리] 또는 [기간별복무조회] 파일을 선택하세요.'}</span></p>
+            <p className="text-sm text-slate-400 mb-12 text-center px-8 leading-relaxed">모든 연도와 월의 데이터가 정확히 처리됩니다. 동일 날짜/유형은 덮어쓰기 됩니다.</p>
             <input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
             <button onClick={() => fileInputRef.current.click()} disabled={isSyncing} className="group relative bg-blue-600 text-white px-16 py-6 rounded-[2rem] font-bold shadow-2xl shadow-blue-200 hover:bg-blue-700 transition-all active:scale-95 text-xl">
                <i className="fa-solid fa-file-arrow-up mr-4"></i>
                <span>CSV 파일 불러오기</span>
             </button>
-            {syncMessage && <p className="mt-12 text-lg text-blue-700 font-bold bg-blue-100 px-8 py-4 rounded-3xl animate-bounce flex items-center gap-3 shadow-sm border border-blue-200"><i className="fa-solid fa-circle-check text-2xl"></i>{syncMessage}</p>}
+            {syncMessage && <p className="mt-12 text-lg text-blue-700 font-semibold bg-blue-100 px-8 py-4 rounded-3xl animate-bounce flex items-center gap-3 shadow-sm border border-blue-200 font-medium"><i className="fa-solid fa-circle-check text-2xl"></i>{String(syncMessage)}</p>}
           </div>
           {dailyPreviewData.length > 0 && (
             <div className="p-8 lg:p-12 animate-in fade-in duration-500 border-t border-slate-50">
               <div className="flex flex-col sm:flex-row justify-between items-center mb-8 gap-6">
-                <h4 className="font-bold text-slate-800 text-2xl">가져온 데이터 미리보기 ({dailyPreviewData.length}건)</h4>
+                <h4 className="font-semibold text-slate-800 text-2xl">가져온 데이터 미리보기 ({dailyPreviewData.length}건)</h4>
                 <button onClick={handleApplyUpdates} className="w-full sm:w-auto bg-emerald-600 text-white px-12 py-4 rounded-[1.5rem] font-bold shadow-xl shadow-emerald-100 hover:bg-emerald-700 transition-all flex items-center justify-center gap-3 text-lg"><i className="fa-solid fa-circle-check text-xl"></i>복무 현황 최종 반영</button>
               </div>
               <div className="overflow-x-auto border-2 border-slate-50 rounded-[2.5rem]">
                 <table className="min-w-full divide-y divide-slate-100 text-base">
-                  <thead className="bg-slate-50/50">
-                    <tr><th className="px-8 py-5 font-bold text-slate-400 uppercase text-center">성명</th><th className="px-8 py-5 font-bold text-slate-400 uppercase text-center">상황</th><th className="px-8 py-5 font-bold text-slate-400 uppercase text-center">기간</th><th className="px-8 py-5 font-bold text-slate-400 uppercase text-left">비고</th></tr>
+                  <thead className="bg-slate-50/50 text-xs font-bold">
+                    <tr><th className="px-8 py-5 text-center">성명</th><th className="px-8 py-5 text-center">상황</th><th className="px-8 py-5 text-center">기간</th><th className="px-8 py-5 text-left">비고</th></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 bg-white font-medium">
                     {dailyPreviewData.map((d, i) => (
                       <tr key={i} className="hover:bg-slate-50/50 transition-custom">
-                        <td className="px-8 py-5 font-bold text-center text-slate-800 text-xl">{d.name}</td>
-                        <td className="px-8 py-5 text-center whitespace-nowrap"><span className={`px-4 py-1 rounded-xl border-2 text-xs font-bold ${TYPE_COLORS[normalizeType(d.status)] || 'bg-slate-50'}`}>{d.status}</span></td>
-                        <td className="px-8 py-5 text-center text-slate-500 font-bold whitespace-nowrap">{d.period}</td>
-                        <td className="px-8 py-5 truncate max-w-[300px] text-slate-400 text-sm">{d.reason}</td>
+                        <td className="px-8 py-5 font-semibold text-center text-slate-800 text-xl">{String(d.name)}</td>
+                        <td className="px-8 py-5 text-center whitespace-nowrap"><span className={`px-4 py-1 rounded-xl border-2 text-xs font-semibold ${TYPE_COLORS[normalizeType(d.status)] || 'bg-slate-50'}`}>{String(d.status)}</span></td>
+                        <td className="px-8 py-5 text-center text-slate-500 font-semibold whitespace-nowrap font-bold">{String(d.period)}</td>
+                        <td className="px-8 py-5 truncate max-w-[300px] text-slate-400 text-sm font-normal">{String(d.reason)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -649,7 +770,7 @@
             <div className="max-w-7xl mx-auto px-6 w-full flex items-center justify-between">
               <div className="flex items-center gap-4 cursor-pointer group" onClick={() => setViewMode('calendar')}>
                 <div className="w-12 h-12 lg:w-14 lg:h-14 bg-blue-600 rounded-[1.25rem] flex items-center justify-center text-white text-2xl shadow-2xl shadow-blue-200 group-hover:rotate-12 transition-transform duration-500"><i className="fa-solid fa-calendar-days"></i></div>
-                <div><h1 className="text-2xl lg:text-3xl font-black text-slate-800 tracking-tighter leading-none"><span>WorkSync</span> <span className="text-blue-600">Pro</span></h1><p className="text-[11px] text-slate-400 font-bold uppercase mt-2 tracking-widest hidden sm:block">Admin Management</p></div>
+                <div><h1 className="text-2xl lg:text-3xl font-bold text-slate-800 tracking-tighter leading-none"><span>WorkSync</span> <span className="text-blue-600">Pro</span></h1><p className="text-[11px] text-slate-400 font-semibold uppercase mt-2 tracking-widest hidden sm:block">Admin Management</p></div>
               </div>
               <nav className="hidden lg:flex gap-3">
                 {[
@@ -688,40 +809,40 @@
               <div className="bg-white rounded-[3.5rem] shadow-[0_35px_80px_rgba(0,0,0,0.4)] z-10 w-full max-w-2xl overflow-hidden animate-in zoom-in duration-300 border border-slate-100">
                 <form onSubmit={handleSubmit}>
                   <div className="p-10 border-b border-slate-50 flex justify-between items-center bg-slate-50/50">
-                    <h3 className="font-bold text-slate-800 text-3xl tracking-tight"><i className="fa-solid fa-plus text-blue-600 mr-4"></i><span>수동 복무 등록</span></h3>
+                    <h3 className="font-semibold text-slate-800 text-3xl tracking-tight"><i className="fa-solid fa-plus text-blue-600 mr-4"></i><span>수동 복무 등록</span></h3>
                     <button type="button" onClick={() => setIsModalOpen(false)} className="text-slate-300 hover:text-slate-600 p-2"><i className="fa-solid fa-xmark text-4xl"></i></button>
                   </div>
-                  <div className="p-10 lg:p-14 space-y-10 overflow-y-auto max-h-[70vh] hide-scrollbar">
+                  <div className="p-10 lg:p-14 space-y-10 overflow-y-auto max-h-[70vh] hide-scrollbar font-medium">
                     <div className="space-y-4">
-                      <label className="text-base font-bold text-slate-400 uppercase tracking-widest ml-2"><span>대상자 성명</span></label>
-                      <input type="text" name="name" value={newEvent.name} onChange={handleInputChange} placeholder="성명 입력" required className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-bold focus:border-blue-500 outline-none shadow-sm transition-all"/>
+                      <label className="text-base font-semibold text-slate-400 uppercase tracking-widest ml-2"><span>대상자 성명</span></label>
+                      <input type="text" name="name" value={newEvent.name} onChange={handleInputChange} placeholder="성명 입력" required className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-semibold focus:border-blue-500 outline-none shadow-sm transition-all"/>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-8">
                        <div className="space-y-4">
-                         <label className="text-base font-bold text-slate-400 uppercase tracking-widest ml-2"><span>복무 종별</span></label>
-                         <select name="type" value={newEvent.type} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-bold focus:border-blue-500 outline-none bg-white font-medium appearance-none">
+                         <label className="text-base font-semibold text-slate-400 uppercase tracking-widest ml-2"><span>복무 종류</span></label>
+                         <select name="type" value={newEvent.type} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-semibold focus:border-blue-500 outline-none bg-white appearance-none">
                            {WORK_TYPES.map(t => <option key={t} value={t}><span>{t}</span></option>)}
                          </select>
                        </div>
                        <div className="space-y-4">
-                         <label className="text-base font-bold text-slate-400 uppercase tracking-widest ml-2"><span>조회 날짜</span></label>
-                         <input type="date" name="date" value={newEvent.date} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-bold focus:border-blue-500 outline-none font-medium"/>
+                         <label className="text-base font-semibold text-slate-400 uppercase tracking-widest ml-2"><span>조회 날짜</span></label>
+                         <input type="date" name="date" value={newEvent.date} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-semibold focus:border-blue-500 outline-none"/>
                        </div>
                     </div>
                     <div className="flex gap-8">
-                       <div className="flex-1 space-y-4"><label className="text-base font-bold text-slate-400 uppercase tracking-widest ml-2"><span>시작 시간</span></label><input type="time" name="startTime" value={newEvent.startTime} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-bold focus:border-blue-500 outline-none font-medium"/></div>
-                       <div className="flex-1 space-y-4"><label className="text-base font-bold text-slate-400 uppercase tracking-widest ml-2"><span>종료 시간</span></label><input type="time" name="endTime" value={newEvent.endTime} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-bold focus:border-blue-500 outline-none font-medium"/></div>
+                       <div className="flex-1 space-y-4"><label className="text-base font-semibold text-slate-400 uppercase tracking-widest ml-2"><span>시작 시간</span></label><input type="time" name="startTime" value={newEvent.startTime} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-semibold focus:border-blue-500 outline-none"/></div>
+                       <div className="flex-1 space-y-4"><label className="text-base font-semibold text-slate-400 uppercase tracking-widest ml-2"><span>종료 시간</span></label><input type="time" name="endTime" value={newEvent.endTime} onChange={handleInputChange} className="w-full border-2 border-slate-100 rounded-[1.5rem] p-6 text-2xl font-semibold focus:border-blue-500 outline-none"/></div>
                     </div>
                     <div className="space-y-4">
                       <div className="flex justify-between items-center ml-2">
-                        <label className="text-base font-bold text-slate-400 uppercase tracking-widest"><span>상세 사유 및 용무</span></label>
-                        <button type="button" onClick={polishReasonWithAi} disabled={isAiLoading} className="text-sm font-bold text-indigo-600 hover:text-indigo-800 transition-custom flex items-center gap-2 border border-indigo-100 bg-indigo-50 px-4 py-2 rounded-xl shadow-sm"><i className={isAiLoading ? "fa-solid fa-spinner animate-spin" : "fa-solid fa-sparkles"}></i><span>✨ AI 행정용어 교정</span></button>
+                        <label className="text-base font-semibold text-slate-400 uppercase tracking-widest"><span>상세 사유 및 용무</span></label>
+                        <button type="button" onClick={polishReasonWithAi} disabled={isAiLoading} className="text-sm font-semibold text-indigo-600 hover:text-indigo-800 transition-custom flex items-center gap-2 border border-indigo-100 bg-indigo-50 px-4 py-2 rounded-xl shadow-sm"><i className={isAiLoading ? "fa-solid fa-spinner animate-spin" : "fa-solid fa-sparkles"}></i><span>✨ AI 행정용어 교정</span></button>
                       </div>
-                      <textarea rows="3" name="details" value={newEvent.details} onChange={handleInputChange} placeholder="사유를 자유롭게 입력하세요 (예: 아이 병원)" className="w-full border-2 border-slate-100 rounded-[2rem] p-6 text-2xl font-bold focus:border-blue-500 outline-none shadow-sm transition-all bg-white resize-none"/>
+                      <textarea rows="3" name="details" value={newEvent.details} onChange={handleInputChange} placeholder="사유를 자유롭게 입력하세요" className="w-full border-2 border-slate-100 rounded-[2rem] p-6 text-2xl font-semibold focus:border-blue-500 outline-none shadow-sm transition-all bg-white resize-none font-medium"/>
                     </div>
                   </div>
                   <div className="p-10 bg-slate-50/50 border-t border-slate-100 flex gap-6">
-                    <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-6 border-2 border-slate-200 rounded-3xl font-bold text-slate-400 hover:bg-white hover:text-slate-600 transition-custom text-xl"><span>취소</span></button>
+                    <button type="button" onClick={() => setIsModalOpen(false)} className="flex-1 py-6 border-2 border-slate-200 rounded-3xl font-semibold text-slate-400 hover:bg-white hover:text-slate-600 transition-custom text-xl"><span>취소</span></button>
                     <button type="submit" className="flex-1 py-6 bg-blue-600 text-white rounded-3xl font-bold shadow-2xl shadow-blue-100 hover:bg-blue-700 transition-all text-xl active:scale-95"><span>복무 등록 완료</span></button>
                   </div>
                 </form>
@@ -731,12 +852,12 @@
 
           {globalAlert.isOpen && (
             <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
-              <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setGlobalAlert({isOpen: false, message: ''})}></div>
-              <div className="bg-white rounded-[4rem] shadow-[0_40px_100px_rgba(0,0,0,0.5)] w-full max-w-lg p-12 lg:p-16 text-center animate-in zoom-in duration-300 relative border border-slate-50">
+              <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setGlobalAlert({isOpen: false, message: ''})}></div>
+              <div className="bg-white rounded-[4rem] shadow-[0_40px_100px_rgba(0,0,0,0.5)] w-full max-w-lg p-12 lg:p-16 text-center animate-in zoom-in duration-300 relative border border-slate-50 font-medium">
                  <div className="w-24 h-24 bg-blue-50 text-blue-600 rounded-[2.5rem] flex items-center justify-center text-5xl mx-auto mb-10 shadow-inner"><i className="fa-solid fa-circle-exclamation"></i></div>
-                 <h3 className="text-3xl font-bold text-slate-800 mb-8 tracking-tight"><span>안내드립니다</span></h3>
-                 <div className="bg-slate-50/50 p-8 rounded-[2rem] border-2 border-slate-50 mb-12"><p className="text-2xl font-bold text-slate-700 leading-relaxed whitespace-pre-wrap tracking-tighter italic"><span>{String(globalAlert.message)}</span></p></div>
-                 <button onClick={() => setGlobalAlert({isOpen: false, message: ''})} className="w-full bg-slate-900 text-white py-6 rounded-[2rem] font-bold shadow-2xl hover:bg-slate-800 transition-all text-xl active:scale-95 tracking-widest uppercase"><span>OK, 확인했습니다</span></button>
+                 <h3 className="text-3xl font-semibold text-slate-800 mb-8 tracking-tight"><span>알림</span></h3>
+                 <div className="bg-slate-50/50 p-8 rounded-[2rem] border-2 border-slate-50 mb-12"><p className="text-2xl font-semibold text-slate-700 leading-relaxed whitespace-pre-wrap tracking-tighter"><span>{String(globalAlert.message)}</span></p></div>
+                 <button onClick={() => setGlobalAlert({isOpen: false, message: ''})} className="w-full bg-slate-900 text-white py-6 rounded-[2rem] font-semibold shadow-2xl hover:bg-slate-800 transition-all text-xl active:scale-95 tracking-widest uppercase"><span>OK, 확인했습니다</span></button>
               </div>
             </div>
           )}
@@ -744,12 +865,12 @@
           {globalConfirm.isOpen && (
             <div className="fixed inset-0 z-[120] flex items-center justify-center p-4">
               <div className="absolute inset-0 bg-slate-900/70 backdrop-blur-md animate-in fade-in duration-200" onClick={() => setGlobalConfirm({isOpen: false, message: '', onConfirm: null})}></div>
-              <div className="bg-white rounded-[4rem] shadow-[0_40px_100px_rgba(0,0,0,0.5)] w-full max-w-lg p-12 lg:p-16 text-center animate-in zoom-in duration-300 relative border border-slate-50">
+              <div className="bg-white rounded-[4rem] shadow-[0_40px_100px_rgba(0,0,0,0.5)] w-full max-w-lg p-12 lg:p-16 text-center animate-in zoom-in duration-300 relative border border-slate-50 font-medium">
                  <div className="w-24 h-24 bg-orange-50 text-orange-600 rounded-[2.5rem] flex items-center justify-center text-5xl mx-auto mb-10 shadow-inner"><i className="fa-solid fa-circle-question"></i></div>
-                 <h3 className="text-3xl font-bold text-slate-800 mb-8 tracking-tight"><span>확인이 필요합니다</span></h3>
+                 <h3 className="text-3xl font-semibold text-slate-800 mb-8 tracking-tight"><span>확인이 필요합니다</span></h3>
                  <div className="bg-slate-50/50 p-8 rounded-[2rem] border-2 border-slate-50 mb-12"><p className="text-2xl font-bold text-slate-700 leading-relaxed whitespace-pre-wrap tracking-tighter italic"><span>{String(globalConfirm.message)}</span></p></div>
                  <div className="flex gap-4">
-                    <button onClick={() => setGlobalConfirm({isOpen: false, message: '', onConfirm: null})} className="flex-1 bg-slate-100 text-slate-500 py-6 rounded-[2rem] font-bold hover:bg-slate-200 transition-all text-xl active:scale-95"><span>취소</span></button>
+                    <button onClick={() => setGlobalConfirm({isOpen: false, message: '', onConfirm: null})} className="flex-1 bg-slate-100 text-slate-500 py-6 rounded-[2rem] font-semibold hover:bg-slate-200 transition-all text-xl active:scale-95"><span>취소</span></button>
                     <button onClick={() => { if(globalConfirm.onConfirm) globalConfirm.onConfirm(); setGlobalConfirm({isOpen: false, message: '', onConfirm: null}); }} className="flex-1 bg-blue-600 text-white py-6 rounded-[2rem] font-bold shadow-2xl shadow-blue-100 hover:bg-blue-700 transition-all text-xl active:scale-95"><span>진행하기</span></button>
                  </div>
               </div>
