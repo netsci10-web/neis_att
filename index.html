@@ -12,7 +12,7 @@
   <!-- FontAwesome Icons -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   
-  <!-- React & ReactDOM (안정적인 cdnjs 사용) -->
+  <!-- React & ReactDOM -->
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   
@@ -42,7 +42,7 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useRef, useMemo } = React;
+    const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
     // --- 에러 바운더리 ---
     class ErrorBoundary extends React.Component {
@@ -123,7 +123,27 @@
       return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
     };
 
-    // 💡 1일 = 8시간(480분) 기준 분 단위 정확한 계산 로직
+    const clampDate = (date, year) => {
+        const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
+        const startOfYearMidnight = new Date(year, 0, 1, 0, 0, 0);
+        const startOfYearWork = new Date(year, 0, 1, 9, 0, 0);
+        const endOfYearMidnight = new Date(year, 11, 31, 0, 0, 0);
+        const endOfYearWork = new Date(year, 11, 31, 17, 0, 0);
+        
+        if (date < startOfYearMidnight) return isMidnight ? startOfYearMidnight : startOfYearWork;
+        if (date > new Date(year, 11, 31, 23, 59, 59)) return isMidnight ? endOfYearMidnight : endOfYearWork;
+        
+        return date;
+    };
+
+    const getMonthsDays = (totalDays) => {
+        const m = Math.floor(totalDays / 30);
+        const d = totalDays % 30;
+        if (m > 0 && d === 0) return `${m}개월`;
+        if (m > 0) return `${m}개월 ${d}일`;
+        return `${d}일`;
+    };
+
     const getDurationMins = (start, end) => {
       if (!(start instanceof Date) || !(end instanceof Date) || isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
       const ms = end.getTime() - start.getTime();
@@ -161,7 +181,6 @@
       return totalMins; 
     };
 
-    // 💡 증빙서류 필요 여부 판별 함수 (공가 또는 가족돌봄/경조사 특별휴가)
     const needsAttachment = (type, originalStatus = '', details = '') => {
         if (type === '공가') return true;
         if (type === '특별휴가') {
@@ -171,7 +190,6 @@
         return false;
     };
 
-    // 💡 분을 "X일 Y시간 Z분" 1일 8시간 포맷으로 변환
     const formatDur = (totalMins) => {
       if (!totalMins || totalMins <= 0) return "0일 0시간 0분";
       const d = Math.floor(totalMins / 480);
@@ -334,11 +352,20 @@
       const fileInputRef = useRef(null);
       const backupFileInputRef = useRef(null);
 
+      // 💡 로컬 스토리지 업데이트 최적화 (의존성 분리)
+      useEffect(() => { localStorage.setItem('work_schedule_departments', JSON.stringify(departments)); }, [departments]);
+      useEffect(() => { localStorage.setItem('work_schedule_staff', JSON.stringify(staff)); }, [staff]);
+      useEffect(() => { localStorage.setItem('work_schedule_events', JSON.stringify(events)); }, [events]);
+
+      // 💡 모달 활성화 시 배경 스크롤 고정
       useEffect(() => {
-        localStorage.setItem('work_schedule_departments', JSON.stringify(departments));
-        localStorage.setItem('work_schedule_staff', JSON.stringify(staff));
-        localStorage.setItem('work_schedule_events', JSON.stringify(events));
-      }, [departments, staff, events]);
+        if (isModalOpen || globalAlert.isOpen || globalConfirm.isOpen) {
+            document.body.style.overflow = 'hidden';
+        } else {
+            document.body.style.overflow = 'unset';
+        }
+        return () => { document.body.style.overflow = 'unset'; }
+      }, [isModalOpen, globalAlert.isOpen, globalConfirm.isOpen]);
 
       useEffect(() => {
         if (departments.length > 0 && !settingsNewStaff.department) {
@@ -355,7 +382,7 @@
         setEvents(prev => prev.map(e => e.id === id ? { ...e, hasAttachment: !e.hasAttachment } : e));
       };
 
-      const handleSelectEvent = (event) => {
+      const handleSelectEvent = useCallback((event) => {
         const durationStr = getDurationString(event.start, event.end);
         const currentStaff = staff.find(s => s.name === event.name);
         const position = currentStaff ? currentStaff.position : (event.position || '-');
@@ -424,12 +451,7 @@
         );
 
         showAlert(detailNode, 'center', '근무상황 상세조회');
-      };
-
-      const handleInputChange = (e) => {
-        const { name, value } = e.target;
-        setNewEvent(prev => ({ ...prev, [name]: value }));
-      };
+      }, [staff]);
 
       const handleSubmit = (e) => {
         e.preventDefault();
@@ -761,6 +783,93 @@
         }
       };
 
+      // --- 💡 메모이제이션된 뷰 렌더링 데이터 ---
+      const listFilteredEvents = useMemo(() => {
+        return events.filter(e => {
+          const searchName = (appliedFilter.name || '').trim();
+          const matchN = String(e.name || '').includes(searchName);
+          const matchT = appliedFilter.type === '전체' || e.type === appliedFilter.type;
+          const eventStart = formatDate(e.start), eventEnd = formatDate(e.end);
+          const matchD = (!appliedFilter.start || eventEnd >= appliedFilter.start) && (!appliedFilter.end || eventStart <= appliedFilter.end);
+          return matchN && matchT && matchD;
+        }).sort((a,b) => b.start.getTime() - a.start.getTime());
+      }, [events, appliedFilter]);
+
+      const orgFilteredRecords = useMemo(() => {
+        const isEventOnDate = (e, d) => d >= formatDate(e.start) && d <= formatDate(e.end);
+        const staffMap = new Map();
+        events.forEach(e => {
+            if (!staffMap.has(e.name)) {
+                staffMap.set(e.name, { name: e.name, department: departments[0], position: e.position || '-' });
+            }
+        });
+        staff.forEach(s => staffMap.set(s.name, s));
+        
+        const combined = Array.from(staffMap.values())
+          .sort((a,b) => {
+             const wA = getPositionWeight(a.position), wB = getPositionWeight(b.position);
+             if(wA !== wB) return wA - wB;
+             return String(a.name).localeCompare(String(b.name), 'ko');
+          });
+          
+        const records = combined.map(s => {
+          const active = events.find(e => e.name === s.name && isEventOnDate(e, orgSelectedDate));
+          return active ? { ...s, status: active.originalStatus || active.type, period: `${formatTime(active.start)}~${formatTime(active.end)}`, reason: active.details }
+                        : { ...s, status: '정상근무', period: '-', reason: '-' };
+        });
+        return records.filter(r => orgFilterStatus === '전체' || r.status.includes(orgFilterStatus) || (orgFilterStatus === '부재중' && r.status !== '정상근무'));
+      }, [staff, events, departments, orgSelectedDate, orgFilterStatus]);
+
+      const mngStatsData = useMemo(() => {
+        const yearEvents = events.filter(e => {
+            if (!(e.start instanceof Date) || !(e.end instanceof Date) || isNaN(e.start.getTime()) || isNaN(e.end.getTime())) return false;
+            return e.start.getFullYear() === mngYear || e.end.getFullYear() === mngYear;
+        });
+
+        const missingDocs = yearEvents.filter(e => needsAttachment(e.type, e.originalStatus, e.details) && !e.hasAttachment)
+                                      .sort((a,b) => b.start.getTime() - a.start.getTime());
+
+        const childcareEvents = yearEvents.filter(e => e.originalStatus && (e.originalStatus.includes('육아시간') || e.originalStatus.includes('모성보호')));
+        const childcareStats = {};
+        childcareEvents.forEach(e => {
+            if (!childcareStats[e.name]) childcareStats[e.name] = { totalMins: 0, types: new Set(), events: [], usedDates: new Set() };
+            const start = clampDate(e.start, mngYear);
+            const end = clampDate(e.end, mngYear);
+            if (start > end) return;
+            const mins = getDurationMins(start, end);
+            childcareStats[e.name].totalMins += mins;
+            childcareStats[e.name].types.add(e.originalStatus);
+            childcareStats[e.name].events.push({ ...e, start, end, clampedMins: mins });
+            
+            let curD = new Date(start.getFullYear(), start.getMonth(), start.getDate());
+            const endD = new Date(end.getFullYear(), end.getMonth(), end.getDate());
+            while(curD <= endD) {
+                childcareStats[e.name].usedDates.add(formatDate(curD));
+                curD.setDate(curD.getDate() + 1);
+            }
+        });
+
+        const sickLeaveEvents = yearEvents.filter(e => e.type === '병가');
+        const sickLeaveStats = {};
+        sickLeaveEvents.forEach(e => {
+            if (!sickLeaveStats[e.name]) sickLeaveStats[e.name] = { totalMins: 0, events: [] };
+            const start = clampDate(e.start, mngYear);
+            const end = clampDate(e.end, mngYear);
+            if (start > end) return;
+            const mins = getDurationMins(start, end);
+            sickLeaveStats[e.name].totalMins += mins;
+            sickLeaveStats[e.name].events.push({ ...e, start, end, clampedMins: mins });
+        });
+        
+        const longTermLeaves = yearEvents.filter(e => e.originalStatus && e.originalStatus.includes('장기재직'))
+                                      .sort((a,b) => b.start.getTime() - a.start.getTime());
+        
+        return { missingDocs, childcareStats, sickLeaveStats, longTermLeaves };
+      }, [events, mngYear]);
+
+      const getStaffInfo = useCallback((name) => staff.find(s => s.name === name) || { department: '-', position: '-' }, [staff]);
+
+
       // --- Views ---
       const renderCalendar = () => {
         const daysInMonth = (y, m) => new Date(y, m + 1, 0).getDate();
@@ -776,16 +885,18 @@
             if (wA !== wB) return wA - wB;
             return String(a.name).localeCompare(String(b.name), 'ko');
           });
+          const isToday = formatDate(new Date()) === dateStr;
           days.push(
-            <div key={d} className="calendar-day bg-white border border-slate-100 p-3 hover:bg-blue-50/20 transition-colors cursor-pointer" onClick={() => { setNewEvent({...newEvent, date: dateStr}); setIsModalOpen(true); }}>
+            <div key={d} className={`calendar-day bg-white border p-3 hover:bg-blue-50/20 transition-colors cursor-pointer ${isToday ? 'border-blue-400 shadow-md ring-1 ring-blue-400 bg-blue-50/10' : 'border-slate-100'}`} onClick={() => { setNewEvent(prev => ({...prev, date: dateStr})); setIsModalOpen(true); }}>
               <div 
                   onClick={(ev) => { 
                     ev.stopPropagation(); 
                     setOrgSelectedDate(dateStr); 
                     setOrgFilterStatus('전체'); 
                     setViewMode('organization'); 
+                    window.scrollTo({ top: 0, behavior: 'smooth' });
                   }}
-                  className={`w-10 h-10 flex items-center justify-center rounded-full font-bold text-lg mb-2 transition-all hover:scale-110 shadow-sm cursor-pointer ${formatDate(new Date()) === dateStr ? 'bg-blue-600 text-white hover:bg-blue-700' : 'text-slate-600 bg-slate-50 hover:bg-slate-200'}`}
+                  className={`w-10 h-10 flex items-center justify-center rounded-full font-bold text-lg mb-2 transition-all hover:scale-110 shadow-sm cursor-pointer ${isToday ? 'bg-blue-600 text-white hover:bg-blue-700 ring-4 ring-blue-200' : 'text-slate-600 bg-slate-50 hover:bg-slate-200'}`}
                   title={`${dateStr} 기관현황 확인`}
               >
                   <span>{d}</span>
@@ -829,41 +940,19 @@
       };
 
       const renderListView = () => {
-        const filtered = events.filter(e => {
-          const searchName = (appliedFilter.name || '').trim();
-          const matchN = String(e.name || '').includes(searchName);
-          const matchT = appliedFilter.type === '전체' || e.type === appliedFilter.type;
-          const eventStart = formatDate(e.start), eventEnd = formatDate(e.end);
-          const matchD = (!appliedFilter.start || eventEnd >= appliedFilter.start) && (!appliedFilter.end || eventStart <= appliedFilter.end);
-          return matchN && matchT && matchD;
-        }).sort((a,b) => {
-          const timeA = a.start instanceof Date && !isNaN(a.start.getTime()) ? a.start.getTime() : 0;
-          const timeB = b.start instanceof Date && !isNaN(b.start.getTime()) ? b.start.getTime() : 0;
-          return timeB - timeA;
-        });
-
         const renderSummary = () => {
-            if (!appliedFilter.name || filtered.length === 0) return null;
+            if (!appliedFilter.name || listFilteredEvents.length === 0) return null;
             
             const grouped = {};
-            filtered.forEach(e => {
+            listFilteredEvents.forEach(e => {
                 if (!grouped[e.name]) grouped[e.name] = {};
                 const mins = getDurationMins(e.start, e.end);
-                
-                const mainType = e.type;
-                const subType = e.originalStatus || e.type;
-
-                if (!grouped[e.name][mainType]) {
-                    grouped[e.name][mainType] = { total: 0, subTypes: {} };
-                }
+                const mainType = e.type, subType = e.originalStatus || e.type;
+                if (!grouped[e.name][mainType]) grouped[e.name][mainType] = { total: 0, subTypes: {} };
                 grouped[e.name][mainType].total += mins;
-                
-                if (!grouped[e.name][mainType].subTypes[subType]) {
-                    grouped[e.name][mainType].subTypes[subType] = 0;
-                }
+                if (!grouped[e.name][mainType].subTypes[subType]) grouped[e.name][mainType].subTypes[subType] = 0;
                 grouped[e.name][mainType].subTypes[subType] += mins;
             });
-
             const sortedNames = Object.keys(grouped).sort((a, b) => a.localeCompare(b, 'ko'));
 
             return (
@@ -883,7 +972,6 @@
                                          <span className={`px-3 py-1 rounded-lg text-xs font-bold border-2 ${TYPE_COLORS[type] || 'bg-slate-50'}`}>{type}</span>
                                          <span className="font-bold text-slate-800 text-base">{formatDur(data.total)}</span>
                                       </div>
-                                      
                                       {(Object.keys(data.subTypes).length > 1 || Object.keys(data.subTypes)[0] !== type) && (
                                          <div className="mt-3 pt-3 border-t border-slate-200 flex flex-col gap-1.5">
                                             {Object.entries(data.subTypes).map(([subType, subVal]) => (
@@ -945,9 +1033,9 @@
 
             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden">
                <div className="p-6 border-b border-slate-100 bg-slate-50/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <h3 className="text-lg font-bold text-slate-800"><span>복무 기록 내역 ({filtered.length}건)</span></h3>
+                  <h3 className="text-lg font-bold text-slate-800"><span>복무 기록 내역 ({listFilteredEvents.length}건)</span></h3>
                   <div className="flex items-center gap-3 w-full sm:w-auto">
-                    <button onClick={() => generateAiReportFromList(filtered)} disabled={isAiLoading} className="flex-1 sm:flex-none px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm transition-all">
+                    <button onClick={() => generateAiReportFromList(listFilteredEvents)} disabled={isAiLoading} className="flex-1 sm:flex-none px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 disabled:opacity-50 flex items-center justify-center gap-2 shadow-sm transition-all">
                       {isAiLoading ? <i className="fa-solid fa-spinner animate-spin"></i> : <i className="fa-solid fa-sparkles"></i>}<span>AI 요약</span>
                     </button>
                     <span className="text-xs text-slate-400 font-medium whitespace-nowrap"><span>최신순 정렬</span></span>
@@ -969,9 +1057,9 @@
                        </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-50 bg-white text-center text-sm font-medium">
-                       {filtered.length === 0 ? (
+                       {listFilteredEvents.length === 0 ? (
                          <tr><td colSpan="8" className="px-6 py-20 text-center text-slate-400"><span>조회된 기록이 없습니다. 상단에서 조회를 눌러주세요.</span></td></tr>
-                       ) : filtered.map(e => (
+                       ) : listFilteredEvents.map(e => (
                          <tr key={e.id} className="hover:bg-slate-50/50 transition-colors group">
                             <td className="px-6 py-4 whitespace-nowrap">
                                <span className={`px-3 py-1.5 rounded-lg border text-[11px] font-bold ${TYPE_COLORS[e.type] || 'bg-slate-50'}`}><span>{String(e.type)}</span></span>
@@ -1029,30 +1117,6 @@
       };
 
       const renderOrganizationView = () => {
-        const isEventOnDate = (e, d) => d >= formatDate(e.start) && d <= formatDate(e.end);
-        
-        const staffMap = new Map();
-        events.forEach(e => {
-            if (!staffMap.has(e.name)) {
-                staffMap.set(e.name, { name: e.name, department: departments[0], position: e.position || '-' });
-            }
-        });
-        staff.forEach(s => staffMap.set(s.name, s));
-        
-        const combined = Array.from(staffMap.values())
-          .sort((a,b) => {
-             const wA = getPositionWeight(a.position), wB = getPositionWeight(b.position);
-             if(wA !== wB) return wA - wB;
-             return String(a.name).localeCompare(String(b.name), 'ko');
-          });
-          
-        const records = combined.map(s => {
-          const active = events.find(e => e.name === s.name && isEventOnDate(e, orgSelectedDate));
-          return active ? { ...s, status: active.originalStatus || active.type, period: `${formatTime(active.start)}~${formatTime(active.end)}`, reason: active.details }
-                        : { ...s, status: '정상근무', period: '-', reason: '-' };
-        });
-        const filtered = records.filter(r => orgFilterStatus === '전체' || r.status.includes(orgFilterStatus) || (orgFilterStatus === '부재중' && r.status !== '정상근무'));
-        
         return (
           <div className="space-y-6 animate-in fade-in duration-500">
             <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
@@ -1078,7 +1142,7 @@
                      </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 bg-white font-medium">
-                     {filtered.map((r, i) => (
+                     {orgFilteredRecords.map((r, i) => (
                        <tr key={i} className="hover:bg-blue-50/5 transition-custom">
                           <td className="px-6 py-4 whitespace-nowrap text-center">
                              <span className="text-slate-500 text-sm">{r.department || departments[0]}</span><br/>
@@ -1102,71 +1166,7 @@
       };
 
       const renderManagementView = () => {
-        const clampDate = (date, year) => {
-            const isMidnight = date.getHours() === 0 && date.getMinutes() === 0;
-            const startOfYearMidnight = new Date(year, 0, 1, 0, 0, 0);
-            const startOfYearWork = new Date(year, 0, 1, 9, 0, 0);
-            const endOfYearMidnight = new Date(year, 11, 31, 0, 0, 0);
-            const endOfYearWork = new Date(year, 11, 31, 17, 0, 0);
-            
-            if (date < startOfYearMidnight) return isMidnight ? startOfYearMidnight : startOfYearWork;
-            if (date > new Date(year, 11, 31, 23, 59, 59)) return isMidnight ? endOfYearMidnight : endOfYearWork;
-            
-            return date;
-        };
-
-        const yearEvents = events.filter(e => {
-            if (!(e.start instanceof Date) || !(e.end instanceof Date) || isNaN(e.start.getTime()) || isNaN(e.end.getTime())) return false;
-            return e.start.getFullYear() === mngYear || e.end.getFullYear() === mngYear;
-        });
-
-        const missingDocs = yearEvents.filter(e => needsAttachment(e.type, e.originalStatus, e.details) && !e.hasAttachment)
-                                      .sort((a,b) => b.start.getTime() - a.start.getTime());
-
-        const childcareEvents = yearEvents.filter(e => e.originalStatus && (e.originalStatus.includes('육아시간') || e.originalStatus.includes('모성보호')));
-        const childcareStats = {};
-        childcareEvents.forEach(e => {
-            if (!childcareStats[e.name]) childcareStats[e.name] = { totalMins: 0, types: new Set(), events: [], usedDates: new Set() };
-            const start = clampDate(e.start, mngYear);
-            const end = clampDate(e.end, mngYear);
-            if (start > end) return;
-            const mins = getDurationMins(start, end);
-            childcareStats[e.name].totalMins += mins;
-            childcareStats[e.name].types.add(e.originalStatus);
-            childcareStats[e.name].events.push({ ...e, start, end, clampedMins: mins });
-            
-            let curD = new Date(start.getFullYear(), start.getMonth(), start.getDate());
-            const endD = new Date(end.getFullYear(), end.getMonth(), end.getDate());
-            while(curD <= endD) {
-                childcareStats[e.name].usedDates.add(formatDate(curD));
-                curD.setDate(curD.getDate() + 1);
-            }
-        });
-        
-        const getMonthsDays = (totalDays) => {
-            const m = Math.floor(totalDays / 30);
-            const d = totalDays % 30;
-            if (m > 0 && d === 0) return `${m}개월`;
-            if (m > 0) return `${m}개월 ${d}일`;
-            return `${d}일`;
-        };
-
-        const sickLeaveEvents = yearEvents.filter(e => e.type === '병가');
-        const sickLeaveStats = {};
-        sickLeaveEvents.forEach(e => {
-            if (!sickLeaveStats[e.name]) sickLeaveStats[e.name] = { totalMins: 0, events: [] };
-            const start = clampDate(e.start, mngYear);
-            const end = clampDate(e.end, mngYear);
-            if (start > end) return;
-            const mins = getDurationMins(start, end);
-            sickLeaveStats[e.name].totalMins += mins;
-            sickLeaveStats[e.name].events.push({ ...e, start, end, clampedMins: mins });
-        });
-        
-        const longTermLeaves = yearEvents.filter(e => e.originalStatus && e.originalStatus.includes('장기재직'))
-                                      .sort((a,b) => b.start.getTime() - a.start.getTime());
-        
-        const getStaffInfo = (name) => staff.find(s => s.name === name) || { department: '-', position: '-' };
+        const { missingDocs, childcareStats, sickLeaveStats, longTermLeaves } = mngStatsData;
 
         const handleShowDetails = (name, typeStr, eventsList) => {
             const sorted = [...eventsList].sort((a,b) => b.start.getTime() - a.start.getTime());
@@ -1393,7 +1393,16 @@
 
           {uploadSubTab !== 'backup' ? (
             <div className="py-20 flex flex-col items-center justify-center bg-blue-50/30 border-b border-slate-100 border-dashed m-6 md:m-8 rounded-[2rem] border-2">
-              <p className="text-sm font-bold text-slate-600 mb-4 text-center px-6">{uploadSubTab === 'daily' ? '[일일근무상황조회] CSV 파일' : '[기간별복무조회] CSV 파일'}</p>
+              <p className="text-base font-bold text-slate-700 mb-3 text-center px-6">{uploadSubTab === 'daily' ? '[일일근무상황조회] CSV 파일' : '[기간별복무조회] CSV 파일'}</p>
+              
+              <div className="text-[13px] font-semibold text-slate-600 mb-8 text-center px-6 py-2.5 bg-white/80 rounded-xl border border-blue-100 shadow-sm max-w-3xl">
+                 {uploadSubTab === 'daily' ? (
+                     <p><i className="fa-solid fa-circle-info mr-1.5 text-blue-500"></i>나이스 &gt; 기본 메뉴 &gt; 복무 &gt; 일일근무상황조회<br/>일자(0000-00-00) - 조회 - 엑셀내려받기(부서일일근무상황목록.CSV)</p>
+                 ) : (
+                     <p><i className="fa-solid fa-circle-info mr-1.5 text-blue-500"></i>나이스 &gt; 교감 &gt; 근무상황관리 &gt; 근무상황관리<br/>기간 - 결재상태 완결 - 조회 - 엑셀내려받기(근무상황목록.CSV)</p>
+                 )}
+              </div>
+
               <input type="file" accept=".csv" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
               <button onClick={() => fileInputRef.current.click()} disabled={isSyncing} className="bg-blue-600 text-white px-10 py-4 rounded-2xl font-bold shadow-lg hover:bg-blue-700 transition-all active:scale-95 text-base flex items-center"><i className="fa-solid fa-file-arrow-up mr-3"></i>CSV 파일 선택</button>
               {syncMessage && <p className="mt-8 text-sm text-blue-700 font-bold bg-blue-100 px-6 py-3 rounded-xl animate-bounce flex items-center gap-2 border border-blue-200"><i className="fa-solid fa-circle-check text-lg"></i>{String(syncMessage)}</p>}
@@ -1547,7 +1556,7 @@
         <div className="min-h-screen pb-32">
           <header className="bg-white/90 backdrop-blur-xl border-b border-slate-200 sticky top-0 z-40 shadow-sm h-16 lg:h-20 flex items-center">
             <div className="max-w-7xl mx-auto px-6 w-full flex items-center justify-between">
-              <div className="flex items-center gap-3 cursor-pointer group" onClick={() => setViewMode('calendar')}>
+              <div className="flex items-center gap-3 cursor-pointer group" onClick={() => { setViewMode('calendar'); window.scrollTo({ top: 0, behavior: 'smooth' }); }}>
                 <div className="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-white text-lg shadow-lg shadow-blue-200 transition-transform duration-500 group-hover:rotate-12"><i className="fa-solid fa-calendar-days"></i></div>
                 <div><h1 className="text-xl font-bold text-slate-800 tracking-tight leading-none">WorkSync <span className="text-blue-600">Pro</span></h1></div>
               </div>
@@ -1560,7 +1569,7 @@
                   {id:'upload', icon:'fa-file-arrow-up', label:'복무 파일 관리'}, 
                   {id:'settings', icon:'fa-gear', label:'인사 설정'}
                 ].map(item => (
-                  <button key={item.id} onClick={() => setViewMode(item.id)} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === item.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}><i className={`fa-solid ${item.icon}`}></i><span>{item.label}</span></button>
+                  <button key={item.id} onClick={() => { setViewMode(item.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className={`px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-all ${viewMode === item.id ? 'bg-blue-600 text-white shadow-md' : 'text-slate-500 hover:bg-slate-100'}`}><i className={`fa-solid ${item.icon}`}></i><span>{item.label}</span></button>
                 ))}
               </nav>
               <button onClick={() => {
@@ -1588,7 +1597,7 @@
                {id:'upload', i:'fa-file-arrow-up'}, 
                {id:'settings', i:'fa-gear'}
              ].map(item => (
-               <button key={item.id} onClick={() => setViewMode(item.id)} className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${viewMode === item.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-100'}`}><i className={`fa-solid ${item.i} text-lg`}></i></button>
+               <button key={item.id} onClick={() => { setViewMode(item.id); window.scrollTo({ top: 0, behavior: 'smooth' }); }} className={`w-10 h-10 flex items-center justify-center rounded-full transition-all ${viewMode === item.id ? 'bg-blue-600 text-white shadow-lg' : 'text-slate-400 hover:bg-slate-100'}`}><i className={`fa-solid ${item.i} text-lg`}></i></button>
              ))}
              <div className="w-[1px] h-6 bg-slate-200 mx-1"></div>
              <button onClick={() => {
