@@ -331,6 +331,9 @@
       const [orgSelectedDate, setOrgSelectedDate] = useState(formatDate(new Date()));
       const [orgFilterStatus, setOrgFilterStatus] = useState('전체');
       const [deptFilters, setDeptFilters] = useState({});
+      
+      // 💡 [부서 필터] 추가된 상태
+      const [orgSelectedDepts, setOrgSelectedDepts] = useState(departments);
 
       const [settingsNewDept, setSettingsNewDept] = useState('');
       const [settingsNewStaff, setSettingsNewStaff] = useState({ name: '', position: '', department: '' });
@@ -352,12 +355,10 @@
       const fileInputRef = useRef(null);
       const backupFileInputRef = useRef(null);
 
-      // 💡 로컬 스토리지 업데이트 최적화 (의존성 분리)
       useEffect(() => { localStorage.setItem('work_schedule_departments', JSON.stringify(departments)); }, [departments]);
       useEffect(() => { localStorage.setItem('work_schedule_staff', JSON.stringify(staff)); }, [staff]);
       useEffect(() => { localStorage.setItem('work_schedule_events', JSON.stringify(events)); }, [events]);
 
-      // 💡 모달 활성화 시 배경 스크롤 고정
       useEffect(() => {
         if (isModalOpen || globalAlert.isOpen || globalConfirm.isOpen) {
             document.body.style.overflow = 'hidden';
@@ -371,6 +372,12 @@
         if (departments.length > 0 && !settingsNewStaff.department) {
           setSettingsNewStaff(prev => ({ ...prev, department: departments[0] }));
         }
+        // 부서 추가/삭제 시 체크박스 동기화
+        setOrgSelectedDepts(prev => {
+            const valid = prev.filter(d => departments.includes(d));
+            const newlyAdded = departments.filter(d => !prev.includes(d));
+            return [...valid, ...newlyAdded];
+        });
       }, [departments]);
 
       const showAlert = (message, align = 'center', title = null) => setGlobalAlert({ isOpen: true, message, align, title });
@@ -817,8 +824,18 @@
           return active ? { ...s, status: active.originalStatus || active.type, period: `${formatTime(active.start)}~${formatTime(active.end)}`, reason: active.details }
                         : { ...s, status: '정상근무', period: '-', reason: '-' };
         });
-        return records.filter(r => orgFilterStatus === '전체' || r.status.includes(orgFilterStatus) || (orgFilterStatus === '부재중' && r.status !== '정상근무'));
-      }, [staff, events, departments, orgSelectedDate, orgFilterStatus]);
+        
+        // 💡 정상근무 탭 필터링 및 부서 체크박스 필터링 통합 적용
+        return records.filter(r => {
+            const rDept = r.department || departments[0];
+            if (departments.length > 1 && orgSelectedDepts.length > 0 && !orgSelectedDepts.includes(rDept)) return false;
+
+            if (orgFilterStatus === '전체') return true;
+            if (orgFilterStatus === '정상근무') return r.status === '정상근무';
+            if (orgFilterStatus === '부재중') return r.status !== '정상근무';
+            return r.status.includes(orgFilterStatus);
+        });
+      }, [staff, events, departments, orgSelectedDate, orgFilterStatus, orgSelectedDepts]);
 
       const mngStatsData = useMemo(() => {
         const yearEvents = events.filter(e => {
@@ -1119,16 +1136,34 @@
       const renderOrganizationView = () => {
         return (
           <div className="space-y-6 animate-in fade-in duration-500">
-            <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200 flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
-               <div className="flex items-center gap-4 w-full xl:w-auto">
-                  <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-xl"><i className="fa-solid fa-building"></i></div>
-                  <div><h3 className="text-xl font-bold text-slate-800">기관 복무 현황</h3><p className="text-sm text-slate-500 mt-1">조회 일자의 실시간 근무 상태입니다.</p></div>
+            <div className="bg-white p-6 md:p-8 rounded-[2rem] shadow-sm border border-slate-200 flex flex-col gap-5">
+               <div className="flex flex-col xl:flex-row justify-between items-start xl:items-center gap-6">
+                   <div className="flex items-center gap-4 w-full xl:w-auto">
+                      <div className="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center text-xl"><i className="fa-solid fa-building"></i></div>
+                      <div><h3 className="text-xl font-bold text-slate-800">기관 복무 현황</h3><p className="text-sm text-slate-500 mt-1">조회 일자의 실시간 근무 상태입니다.</p></div>
+                   </div>
+                   <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto justify-start xl:justify-end">
+                      <input type="date" value={orgSelectedDate} onChange={e => setOrgSelectedDate(e.target.value)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:border-blue-500 outline-none transition-custom shadow-sm"/>
+                      <button onClick={() => setOrgFilterStatus('전체')} className={`px-5 py-2.5 rounded-xl border transition-all text-sm font-bold ${orgFilterStatus === '전체' ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>전체</button>
+                      <button onClick={() => setOrgFilterStatus('정상근무')} className={`px-5 py-2.5 rounded-xl border transition-all text-sm font-bold ${orgFilterStatus === '정상근무' ? 'bg-emerald-600 text-white border-emerald-600 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>정상근무</button>
+                      <button onClick={() => setOrgFilterStatus('부재중')} className={`px-5 py-2.5 rounded-xl border transition-all text-sm font-bold ${orgFilterStatus === '부재중' ? 'bg-orange-500 text-white border-orange-500 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>부재중</button>
+                   </div>
                </div>
-               <div className="flex flex-wrap items-center gap-3 w-full xl:w-auto justify-start xl:justify-end">
-                  <input type="date" value={orgSelectedDate} onChange={e => setOrgSelectedDate(e.target.value)} className="border border-slate-200 rounded-xl px-4 py-2.5 text-sm font-medium focus:border-blue-500 outline-none transition-custom shadow-sm"/>
-                  <button onClick={() => setOrgFilterStatus('전체')} className={`px-5 py-2.5 rounded-xl border transition-all text-sm font-bold ${orgFilterStatus === '전체' ? 'bg-slate-800 text-white border-slate-800 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>전체</button>
-                  <button onClick={() => setOrgFilterStatus('부재중')} className={`px-5 py-2.5 rounded-xl border transition-all text-sm font-bold ${orgFilterStatus === '부재중' ? 'bg-orange-500 text-white border-orange-500 shadow-md' : 'bg-white text-slate-500 border-slate-200 hover:bg-slate-50'}`}>부재중</button>
-               </div>
+               
+               {departments.length > 1 && (
+                   <div className="flex flex-wrap items-center gap-3 pt-5 border-t border-slate-100">
+                       <span className="text-sm font-bold text-slate-400 bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">부서 필터</span>
+                       {departments.map(dept => (
+                           <label key={dept} className="flex items-center gap-2 cursor-pointer hover:bg-slate-50 px-2 py-1 rounded-lg transition-colors">
+                               <input type="checkbox" checked={orgSelectedDepts.includes(dept)} onChange={(e) => {
+                                   if (e.target.checked) setOrgSelectedDepts(prev => [...prev, dept]);
+                                   else setOrgSelectedDepts(prev => prev.filter(d => d !== dept));
+                               }} className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 cursor-pointer"/>
+                               <span className="text-sm font-bold text-slate-600">{dept}</span>
+                           </label>
+                       ))}
+                   </div>
+               )}
             </div>
             <div className="bg-white rounded-[2rem] shadow-sm border border-slate-200 overflow-hidden overflow-x-auto hide-scrollbar pb-2">
                <table className="min-w-full divide-y divide-slate-100 text-sm">
@@ -1142,7 +1177,9 @@
                      </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 bg-white font-medium">
-                     {orgFilteredRecords.map((r, i) => (
+                     {orgFilteredRecords.length === 0 ? (
+                         <tr><td colSpan="5" className="px-6 py-20 text-center text-slate-400">조건에 맞는 인원이 없습니다.</td></tr>
+                     ) : orgFilteredRecords.map((r, i) => (
                        <tr key={i} className="hover:bg-blue-50/5 transition-custom">
                           <td className="px-6 py-4 whitespace-nowrap text-center">
                              <span className="text-slate-500 text-sm">{r.department || departments[0]}</span><br/>
